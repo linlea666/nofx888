@@ -229,6 +229,7 @@ export default function TraderDashboard() {
                 <th className="px-2 py-1">状态</th>
                 <th className="px-2 py-1">价源</th>
                 <th className="px-2 py-1">错误码</th>
+                <th className="px-2 py-1">可同步</th>
               </tr>
             </thead>
             <tbody className="text-[#EAECEF]">
@@ -244,7 +245,8 @@ export default function TraderDashboard() {
                   <td className="px-2 py-1">{o.max_hit ? '是' : ''}</td>
                   <td className="px-2 py-1">{o.status}</td>
                   <td className="px-2 py-1">{o.price_source || '-'}</td>
-                  <td className="px-2 py-1">{o.err_code || o.skip_reason || '-'}</td>
+                  <td className="px-2 py-1">{o.err_code || '-'}</td>
+                  <td className="px-2 py-1">{o.syncable === false ? '否' : '是'}</td>
                 </tr>
               ))}
             </tbody>

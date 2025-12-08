@@ -119,6 +119,9 @@ export interface TraderOrder {
   copy_ratio?: number
   skip_reason?: string
   err_code?: string
+  min_hit?: boolean
+  max_hit?: boolean
+  syncable?: boolean
   created_at?: string
   updated_at?: string
   filled_at?: string

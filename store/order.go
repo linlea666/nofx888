@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -43,6 +44,7 @@ type TraderOrder struct {
 	SkipReason   string  `json:"skip_reason,omitempty"`
 	MinHit       bool    `json:"min_hit,omitempty"`
 	MaxHit       bool    `json:"max_hit,omitempty"`
+	Syncable     bool    `json:"syncable,omitempty"`
 }
 
 // TraderStats 交易统计指标
@@ -306,6 +308,7 @@ func (s *OrderStore) GetByOrderID(traderID, orderID string) (*TraderOrder, error
 	if filledAt.Valid {
 		order.FilledAt, _ = time.Parse(time.RFC3339, filledAt.String)
 	}
+	order.Syncable = order.ErrCode != "unsyncable_order_id" && !strings.HasPrefix(order.OrderID, "tmp-")
 
 	return &order, nil
 }
@@ -639,6 +642,7 @@ func (s *OrderStore) scanOrders(rows *sql.Rows) ([]*TraderOrder, error) {
 		}
 		order.MinHit = minHit.Bool
 		order.MaxHit = maxHit.Bool
+		order.Syncable = order.ErrCode != "unsyncable_order_id" && !strings.HasPrefix(order.OrderID, "tmp-")
 
 		if createdAt.Valid {
 			order.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)

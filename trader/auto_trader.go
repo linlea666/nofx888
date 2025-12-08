@@ -330,6 +330,9 @@ func (at *AutoTrader) Run() error {
 				o.LeaderNotional = dec.ProviderEvent.Notional
 				o.CopyRatio = at.config.CopyConfig.CopyRatio
 				o.PriceSource = dec.PriceSource
+				if o.Price == 0 {
+					o.Price = dec.Price
+				}
 				if o.OrderID == "" && dec.ProviderEvent.TraceID != "" {
 					o.OrderID = dec.ProviderEvent.TraceID
 				}

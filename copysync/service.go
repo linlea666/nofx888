@@ -6,7 +6,7 @@ import (
 	"math"
 	"nofx/logger"
 	"sync"
-	"strings"
+	"time"
 )
 
 // FollowerAccount 获取跟随账户净值。
@@ -21,17 +21,17 @@ type ExecutionAdapter interface {
 
 // CopyDecision 已计算好的跟单指令，传递给 ExecutionAdapter。
 type CopyDecision struct {
-	ProviderEvent ProviderEvent `json:"provider_event"`
-	FollowerEquity float64      `json:"follower_equity"`
-	FollowerNotional float64    `json:"follower_notional"`
-	FollowerQty     float64     `json:"follower_qty"`
-	Price           float64     `json:"price"`
-	PriceSource     string      `json:"price_source"`
-	MinNotionalHit  bool        `json:"min_notional_hit"`
-	MaxNotionalHit  bool        `json:"max_notional_hit"`
-	Skipped         bool        `json:"skipped"`
-	SkipReason      string      `json:"skip_reason"`
-	CopySkipReason  string      `json:"copy_skip_reason"`
+	ProviderEvent   ProviderEvent `json:"provider_event"`
+	FollowerEquity  float64       `json:"follower_equity"`
+	FollowerNotional float64      `json:"follower_notional"`
+	FollowerQty     float64       `json:"follower_qty"`
+	Price           float64       `json:"price"`
+	PriceSource     string        `json:"price_source"`
+	MinNotionalHit  bool          `json:"min_notional_hit"`
+	MaxNotionalHit  bool          `json:"max_notional_hit"`
+	Skipped         bool          `json:"skipped"`
+	SkipReason      string        `json:"skip_reason"`
+	CopySkipReason  string        `json:"copy_skip_reason"`
 	// 公式展示辅助
 	Formula string `json:"formula"`
 }
@@ -45,9 +45,9 @@ type Service struct {
 	priceFunc func(symbol string) (float64, error) // 行情兜底
 	loggerCb  func(decision *CopyDecision)
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
 	baseline *LeaderState
 }
 
@@ -76,37 +76,12 @@ func (s *Service) logSkip(ev ProviderEvent, reason string) {
 		return
 	}
 	dec := &CopyDecision{
-		ProviderEvent: ev,
-		Skipped:       true,
-		SkipReason:    reason,
+		ProviderEvent:  ev,
+		Skipped:        true,
+		SkipReason:     reason,
 		CopySkipReason: reason,
 	}
 	s.loggerCb(dec)
-}
-
-// classifyErr 简单错误码映射。
-func classifyErr(msg string) string {
-	if msg == "" {
-		return ""
-	}
-	l := strings.ToLower(msg)
-	switch {
-	case strings.Contains(l, "min qty"):
-		return "min_qty_not_met"
-	case strings.Contains(l, "min notional"):
-		return "min_notional_not_met"
-	case strings.Contains(l, "insufficient"):
-		return "insufficient_balance"
-	case strings.Contains(l, "price"):
-		return "price_missing"
-	default:
-		return "exchange_reject"
-	}
-}
-
-// ClassifyErr 导出错误码分类，便于外部复用（日志/前端展示一致）。
-func ClassifyErr(msg string) string {
-	return classifyErr(msg)
 }
 
 // WithLogger 设置决策日志回调。
@@ -119,7 +94,7 @@ func (s *Service) Start() error {
 	if s.provider == nil || s.account == nil || s.executor == nil {
 		return fmt.Errorf("copysync: missing provider/account/executor")
 	}
-	// 基线快照（用于过滤已有仓位）仅在可用时加载一次
+	// 基线快照（用于过滤已有仓位）仅在可用时加载一次，失败则重试几次
 	if snap, err := s.provider.Snapshot(s.ctx); err == nil {
 		if s.baseline == nil {
 			s.baseline = snap
@@ -127,7 +102,11 @@ func (s *Service) Start() error {
 			// 更新基线时间戳，避免使用过旧数据
 			s.baseline.Timestamp = snap.Timestamp
 		}
+	} else {
+		logger.Warnf("copysync: snapshot failed on start: %v, will retry", err)
+		go s.retrySnapshot()
 	}
+
 	if err := s.provider.Start(s.ctx); err != nil {
 		return fmt.Errorf("start provider: %w", err)
 	}
@@ -222,6 +201,7 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	followerEquity, err := s.account.GetEquity(s.ctx)
 	if err != nil || followerEquity <= 0 {
 		logger.Infof("copysync: skip %s %s cannot get follower equity: %v", ev.Symbol, ev.Action, err)
+		s.logSkip(ev, "follower_equity_missing")
 		return
 	}
 
@@ -246,21 +226,21 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	}
 
 	decision := &CopyDecision{
-		ProviderEvent:  ev,
-		FollowerEquity: followerEquity,
+		ProviderEvent:   ev,
+		FollowerEquity:  followerEquity,
 		FollowerNotional: followerNotional,
-		FollowerQty:    qty,
-		Price:          price,
-		PriceSource:    priceSource,
-		MinNotionalHit: minHit,
-		MaxNotionalHit: maxHit,
-		Formula:        fmt.Sprintf("follow_notional=max(min, (%.4f/%.4f)*%.4f*%.2f%%)=%.4f qty=%.8f", leaderNotional, ev.LeaderEquity, followerEquity, s.cfg.CopyRatio, followerNotional, qty),
+		FollowerQty:     qty,
+		Price:           price,
+		PriceSource:     priceSource,
+		MinNotionalHit:  minHit,
+		MaxNotionalHit:  maxHit,
+		Formula:         fmt.Sprintf("follow_notional=max(min, (%.4f/%.4f)*%.4f*%.2f%%)=%.4f qty=%.8f", leaderNotional, ev.LeaderEquity, followerEquity, s.cfg.CopyRatio, followerNotional, qty),
 	}
 
 	if err := s.executor.ExecuteCopy(s.ctx, decision); err != nil {
 		decision.Skipped = true
 		decision.SkipReason = err.Error()
-		decision.CopySkipReason = classifyErr(decision.SkipReason)
+		decision.CopySkipReason = ClassifyErr(decision.SkipReason)
 		logger.Infof("copysync: execute %s %s failed: %v (trace=%s)", ev.Symbol, ev.Action, err, ev.TraceID)
 		if s.loggerCb != nil {
 			s.loggerCb(decision)
@@ -286,5 +266,23 @@ func (s *Service) shouldFollow(action string) bool {
 		return s.cfg.FollowClose
 	default:
 		return false
+	}
+}
+
+func (s *Service) retrySnapshot() {
+	for i := 0; i < 3; i++ {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+			snap, err := s.provider.Snapshot(s.ctx)
+			if err != nil {
+				logger.Warnf("copysync: retry snapshot failed (%d/3): %v", i+1, err)
+				continue
+			}
+			logger.Infof("copysync: snapshot retry success")
+			s.SetBaseline(snap)
+			return
+		}
 	}
 }

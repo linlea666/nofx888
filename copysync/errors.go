@@ -1,0 +1,25 @@
+package copysync
+
+import "strings"
+
+// ClassifyErr 统一错误码映射，供决策/订单/日志使用。
+func ClassifyErr(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	l := strings.ToLower(msg)
+	switch {
+	case strings.Contains(l, "min qty"):
+		return "min_qty_not_met"
+	case strings.Contains(l, "min notional"):
+		return "min_notional_not_met"
+	case strings.Contains(l, "insufficient"):
+		return "insufficient_balance"
+	case strings.Contains(l, "price"):
+		return "price_missing"
+	case strings.Contains(l, "query_failed"):
+		return "status_query_failed"
+	default:
+		return "exchange_reject"
+	}
+}

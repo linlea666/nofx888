@@ -7,7 +7,6 @@ import (
 	"nofx/store"
 	"nofx/trader"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -37,11 +36,6 @@ type ExecResult struct {
 func (e *TraderExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecision) error {
 	if e.Trader == nil {
 		return fmt.Errorf("copysync: trader is nil")
-	}
-
-	// 如果 copy 服务未启用（provider 空），跳过
-	if decision.ProviderEvent.ProviderType == "" && e.Config.ProviderType == "" {
-		return fmt.Errorf("copysync: provider not set")
 	}
 
 	// 杠杆/保证金模式同步（尽力而为）
@@ -144,6 +138,9 @@ func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string
 		o.LeaderPrice = dec.ProviderEvent.Price
 		o.LeaderNotional = dec.ProviderEvent.Notional
 		o.PriceSource = dec.PriceSource
+		if o.Price == 0 {
+			o.Price = dec.Price
+		}
 	}
 	if order != nil {
 		if id, ok := order["orderId"]; ok {
@@ -168,27 +165,7 @@ func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string
 	if err != nil {
 		o.Status = "ERROR"
 		o.SkipReason = err.Error()
-		o.ErrCode = classifyErr(err.Error())
+		o.ErrCode = ClassifyErr(err.Error())
 	}
 	e.OrderLogger(o, dec, err)
-}
-
-// classifyErr 简单错误码映射。
-func classifyErr(msg string) string {
-	if msg == "" {
-		return ""
-	}
-	l := strings.ToLower(msg)
-	switch {
-	case strings.Contains(l, "min qty"):
-		return "min_qty_not_met"
-	case strings.Contains(l, "min notional"):
-		return "min_notional_not_met"
-	case strings.Contains(l, "insufficient"):
-		return "insufficient_balance"
-	case strings.Contains(l, "price"):
-		return "price_missing"
-	default:
-		return "exchange_reject"
-	}
 }

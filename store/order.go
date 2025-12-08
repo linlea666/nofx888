@@ -583,7 +583,7 @@ func (s *OrderStore) GetPendingOrders(traderID string) ([]*TraderOrder, error) {
 		SELECT id, trader_id, order_id, client_order_id, symbol, side, position_side,
 			action, order_type, quantity, price, avg_price, executed_qty,
 			leverage, status, fee, fee_asset, realized_pnl, entry_price,
-			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code,
+			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code, min_hit, max_hit,
 			created_at, updated_at, filled_at
 		FROM trader_orders
 		WHERE trader_id = ? AND status = 'NEW'
@@ -603,7 +603,7 @@ func (s *OrderStore) GetAllPendingOrders() ([]*TraderOrder, error) {
 		SELECT id, trader_id, order_id, client_order_id, symbol, side, position_side,
 			action, order_type, quantity, price, avg_price, executed_qty,
 			leverage, status, fee, fee_asset, realized_pnl, entry_price,
-			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code,
+			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code, min_hit, max_hit,
 			created_at, updated_at, filled_at
 		FROM trader_orders
 		WHERE status = 'NEW'
@@ -623,6 +623,7 @@ func (s *OrderStore) scanOrders(rows *sql.Rows) ([]*TraderOrder, error) {
 	for rows.Next() {
 		var order TraderOrder
 		var createdAt, updatedAt, filledAt sql.NullString
+		var minHit, maxHit sql.NullBool
 
 		err := rows.Scan(
 			&order.ID, &order.TraderID, &order.OrderID, &order.ClientOrderID,
@@ -630,12 +631,14 @@ func (s *OrderStore) scanOrders(rows *sql.Rows) ([]*TraderOrder, error) {
 			&order.OrderType, &order.Quantity, &order.Price, &order.AvgPrice,
 			&order.ExecutedQty, &order.Leverage, &order.Status, &order.Fee,
 			&order.FeeAsset, &order.RealizedPnL, &order.EntryPrice,
-			&order.TraceID, &order.ProviderType, &order.PriceSource, &order.LeaderPrice, &order.LeaderNotional, &order.CopyRatio, &order.SkipReason, &order.ErrCode,
+			&order.TraceID, &order.ProviderType, &order.PriceSource, &order.LeaderPrice, &order.LeaderNotional, &order.CopyRatio, &order.SkipReason, &order.ErrCode, &minHit, &maxHit,
 			&createdAt, &updatedAt, &filledAt,
 		)
 		if err != nil {
 			continue
 		}
+		order.MinHit = minHit.Bool
+		order.MaxHit = maxHit.Bool
 
 		if createdAt.Valid {
 			order.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)

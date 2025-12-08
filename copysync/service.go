@@ -196,17 +196,19 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	price := ev.Price
 	priceSource := ev.PriceSource
 	if price <= 0 && s.cfg.PriceFallbackEnabled && s.priceFunc != nil {
-		for attempt := 0; attempt < 3 && price <= 0; attempt++ {
+		backoffs := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond}
+		for i, d := range backoffs {
 			if p, err := s.priceFunc(ev.Symbol); err == nil && p > 0 {
 				price = p
 				priceSource = "market"
 				break
-			} else if err != nil && attempt == 2 {
+			}
+			time.Sleep(d)
+			if i == len(backoffs)-1 && price <= 0 {
 				ev.ErrCode = "price_fallback_failed"
-				s.logSkip(ev, ev.ErrCode)
+				s.logSkip(ev, "获取价格失败")
 				return
 			}
-			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	if price <= 0 {
@@ -391,9 +393,20 @@ func (s *Service) reconcileFollowerPositions() {
 		}
 		key := fmt.Sprintf("%s_%s", ps, side)
 		basePos := s.baseline.Positions[key]
-		// 基线无仓或方向不符时，尝试平掉残留
 		if basePos == nil || basePos.Size <= 0 {
 			logger.Warnf("copysync: reconcile close residual position %s %s size=%.4f", ps, side, size)
+			_ = te.close(nil, side, ps, size)
+			continue
+		}
+		// 方向一致但数量超出基线，平掉差额
+		if size > basePos.Size {
+			diff := size - basePos.Size
+			logger.Warnf("copysync: reconcile trim position %s %s diff=%.4f", ps, side, diff)
+			_ = te.close(nil, side, ps, diff)
+		}
+		// 方向相反（基线方向与当前不符），平掉当前全部
+		if basePos.Side != "" && basePos.Side != side {
+			logger.Warnf("copysync: reconcile opposite position %s follower=%s base=%s size=%.4f", ps, side, basePos.Side, size)
 			_ = te.close(nil, side, ps, size)
 		}
 	}

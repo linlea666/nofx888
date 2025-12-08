@@ -19,6 +19,8 @@ func ClassifyErr(msg string) string {
 		return "exchange_price_reject"
 	case strings.Contains(l, "reject") && strings.Contains(l, "price"):
 		return "exchange_price_reject"
+	case strings.Contains(l, "insufficient position"):
+		return "insufficient_position"
 	case strings.Contains(l, "min qty"):
 		return "min_qty_not_met"
 	case strings.Contains(l, "min notional"):

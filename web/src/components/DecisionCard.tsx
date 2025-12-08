@@ -191,9 +191,9 @@ export function DecisionCard({ decision, language }: DecisionCardProps) {
               阈值命中: {decision.min_hit ? 'min' : ''} {decision.max_hit ? 'max' : ''}
             </div>
           )}
-          {(decision.copy_skip_reason || decision.err_code || decision.error_message) && (
+          {(decision.err_code || decision.copy_skip_reason || decision.error_message) && (
             <div className="text-[#F87171]">
-              跳过/错误: {decision.copy_skip_reason || decision.err_code || decision.error_message}
+              错误码: {decision.err_code || '-'} {decision.copy_skip_reason ? `(原因: ${decision.copy_skip_reason})` : ''}
             </div>
           )}
         </div>

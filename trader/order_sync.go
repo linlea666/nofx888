@@ -22,6 +22,7 @@ type OrderSyncManager struct {
 	retryMutex   sync.Mutex
 	retryCount   map[string]int // order_id -> retry 次数
 	badIDs       map[string]bool // order_id -> unsyncable
+	errMap       map[string]string // order_id -> last err_code
 }
 
 // NewOrderSyncManager 创建订单同步管理器
@@ -37,6 +38,7 @@ func NewOrderSyncManager(st *store.Store, interval time.Duration) *OrderSyncMana
 		configCache: make(map[string]*store.TraderFullConfig),
 		retryCount:  make(map[string]int),
 		badIDs:      make(map[string]bool),
+		errMap:      make(map[string]string),
 	}
 }
 
@@ -165,12 +167,14 @@ func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrd
 			order.PriceSource = "copy"
 		}
 		m.badIDs[order.OrderID] = true
+		m.errMap[order.OrderID] = order.ErrCode
 		_ = m.store.Order().Update(order)
 		return
 	}
 	// 查询成功清理重试计数
 	m.retryMutex.Lock()
 	delete(m.retryCount, order.OrderID)
+	delete(m.errMap, order.OrderID)
 	m.retryMutex.Unlock()
 
 	statusStr, _ := status["status"].(string)

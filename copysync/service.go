@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"nofx/logger"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -180,6 +181,14 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 			}
 		}
 	}
+	// 额外防重复：若跟随端已有同向仓位且事件为开/加仓，跳过
+	if ev.Action == "open" || ev.Action == "add" {
+		if s.followerHasPosition(ev.Symbol, ev.Side) {
+			logger.Infof("copysync: skip %s %s due to follower position exists", ev.Symbol, ev.Action)
+			s.logSkip(ev, "follower_position_exists")
+			return
+		}
+	}
 
 	price := ev.Price
 	priceSource := ev.PriceSource
@@ -297,4 +306,37 @@ func (s *Service) retrySnapshot() {
 			return
 		}
 	}
+}
+
+// followerHasPosition 简单查询跟随端是否已有同向仓位（用于防重复开仓）。
+func (s *Service) followerHasPosition(symbol, side string) bool {
+	te, ok := s.executor.(*TraderExecutor)
+	if !ok || te == nil || te.Trader == nil {
+		return false
+	}
+	positions, err := te.Trader.GetPositions()
+	if err != nil {
+		return false
+	}
+	for _, p := range positions {
+		ps, _ := p["symbol"].(string)
+		if ps != symbol {
+			continue
+		}
+		size := 0.0
+		switch v := p["positionAmt"].(type) {
+		case string:
+			size, _ = strconv.ParseFloat(v, 64)
+		case float64:
+			size = v
+		}
+		if size == 0 {
+			continue
+		}
+		isLong := size > 0
+		if (side == "long" && isLong) || (side == "short" && !isLong) {
+			return true
+		}
+	}
+	return false
 }

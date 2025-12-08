@@ -64,6 +64,7 @@ func (e *TraderExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecision
 				return fmt.Errorf("copysync: qty formatted to zero (min qty not met)")
 			}
 			formattedQty = v
+			decision.FollowerQty = formattedQty
 		}
 	}
 

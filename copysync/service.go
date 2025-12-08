@@ -6,6 +6,7 @@ import (
 	"math"
 	"nofx/logger"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -113,6 +114,8 @@ func (s *Service) Start() error {
 	if err := s.provider.Start(s.ctx); err != nil {
 		return fmt.Errorf("start provider: %w", err)
 	}
+	// 周期性刷新基线，避免长期运行后快照失效
+	go s.refreshBaselineLoop()
 	s.wg.Add(1)
 	go s.loop()
 	logger.Infof("📡 CopySync started for provider=%s", s.provider.Name())
@@ -193,13 +196,17 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	price := ev.Price
 	priceSource := ev.PriceSource
 	if price <= 0 && s.cfg.PriceFallbackEnabled && s.priceFunc != nil {
-		if p, err := s.priceFunc(ev.Symbol); err == nil && p > 0 {
-			price = p
-			priceSource = "market"
-		} else if err != nil {
-			ev.ErrCode = "price_fallback_failed"
-			s.logSkip(ev, ev.ErrCode)
-			return
+		for attempt := 0; attempt < 3 && price <= 0; attempt++ {
+			if p, err := s.priceFunc(ev.Symbol); err == nil && p > 0 {
+				price = p
+				priceSource = "market"
+				break
+			} else if err != nil && attempt == 2 {
+				ev.ErrCode = "price_fallback_failed"
+				s.logSkip(ev, ev.ErrCode)
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	if price <= 0 {
@@ -308,6 +315,26 @@ func (s *Service) retrySnapshot() {
 	}
 }
 
+// refreshBaselineLoop 周期性刷新基线（每30分钟）。
+func (s *Service) refreshBaselineLoop() {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			snap, err := s.provider.Snapshot(s.ctx)
+			if err != nil {
+				logger.Warnf("copysync: refresh baseline failed: %v", err)
+				continue
+			}
+			s.SetBaseline(snap)
+			logger.Infof("copysync: baseline refreshed at %s", time.Now().Format(time.RFC3339))
+		}
+	}
+}
+
 // followerHasPosition 简单查询跟随端是否已有同向仓位（用于防重复开仓）。
 func (s *Service) followerHasPosition(symbol, side string) bool {
 	te, ok := s.executor.(*TraderExecutor)
@@ -323,20 +350,54 @@ func (s *Service) followerHasPosition(symbol, side string) bool {
 		if ps != symbol {
 			continue
 		}
-		size := 0.0
-		switch v := p["positionAmt"].(type) {
-		case string:
-			size, _ = strconv.ParseFloat(v, 64)
-		case float64:
-			size = v
-		}
+		size, isLong := parseFollowerPosition(p)
 		if size == 0 {
 			continue
 		}
-		isLong := size > 0
 		if (side == "long" && isLong) || (side == "short" && !isLong) {
 			return true
 		}
 	}
 	return false
+}
+
+// parseFollowerPosition 兼容不同交易所的持仓方向/数量字段。
+func parseFollowerPosition(p map[string]interface{}) (size float64, isLong bool) {
+	if ps, ok := p["posSide"].(string); ok && ps != "" {
+		ps = strings.ToLower(ps)
+		if ps == "long" {
+			isLong = true
+		} else if ps == "short" {
+			isLong = false
+		}
+	}
+	if ps, ok := p["positionSide"].(string); ok && ps != "" && !isLong {
+		ps = strings.ToLower(ps)
+		if ps == "long" {
+			isLong = true
+		} else if ps == "short" {
+			isLong = false
+		}
+	}
+	switch v := p["positionAmt"].(type) {
+	case string:
+		size, _ = strconv.ParseFloat(v, 64)
+	case float64:
+		size = v
+	}
+	if size == 0 {
+		switch v := p["size"].(type) {
+		case string:
+			size, _ = strconv.ParseFloat(v, 64)
+		case float64:
+			size = v
+		}
+	}
+	if size != 0 && !isLong {
+		isLong = size > 0
+	}
+	if size < 0 {
+		size = -size
+	}
+	return
 }

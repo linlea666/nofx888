@@ -6,6 +6,7 @@ import (
 	"nofx/store"
 	"sync"
 	"time"
+	"strings"
 )
 
 // OrderSyncManager 订单状态同步管理器
@@ -131,6 +132,10 @@ func (m *OrderSyncManager) syncTraderOrders(traderID string, orders []*store.Tra
 	}
 
 	for _, order := range orders {
+		// 跳过无效/临时 order_id
+		if order.ErrCode == "unsyncable_order_id" || strings.HasPrefix(order.OrderID, "tmp-") {
+			continue
+		}
 		m.syncSingleOrder(trader, order)
 	}
 }
@@ -139,6 +144,11 @@ func (m *OrderSyncManager) syncTraderOrders(traderID string, orders []*store.Tra
 func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrder) {
 	status, err := trader.GetOrderStatus(order.Symbol, order.OrderID)
 	if err != nil {
+		// 对暂态错误设置退避：创建2分钟内不降级，超过则标 ERROR
+		if time.Since(order.CreatedAt) < 2*time.Minute {
+			logger.Infof("⚠️  查询订单失败，暂不降级 (ID: %s): %v", order.OrderID, err)
+			return
+		}
 		order.Status = "ERROR"
 		order.SkipReason = fmt.Sprintf("query_failed: %v", err)
 		order.ErrCode = "status_query_failed"

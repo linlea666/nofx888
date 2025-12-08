@@ -7,6 +7,7 @@ import (
 	"nofx/store"
 	"nofx/trader"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -67,6 +68,15 @@ func (e *TraderExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecision
 			decision.FollowerQty = formattedQty
 		}
 	}
+	// 回填实际 notional/公式（使用最新数量/价格）
+	if decision.Price > 0 {
+		decision.FollowerNotional = decision.FollowerQty * decision.Price
+		if decision.ProviderEvent.LeaderEquity > 0 && decision.ProviderEvent.Notional > 0 && decision.FollowerEquity > 0 {
+			rawRatio := decision.ProviderEvent.Notional / decision.ProviderEvent.LeaderEquity
+			target := rawRatio * decision.FollowerEquity * (e.Config.CopyRatio / 100.0)
+			decision.Formula = fmt.Sprintf("raw_ratio=%.6f target_notional=%.4f adjusted_notional=%.4f qty=%.8f", rawRatio, target, decision.FollowerNotional, decision.FollowerQty)
+		}
+	}
 
 	switch decision.ProviderEvent.Action {
 	case "open", "add":
@@ -111,29 +121,26 @@ func (e *TraderExecutor) close(dec *CopyDecision, side, symbol string, qty float
 	if positions, err := e.Trader.GetPositions(); err == nil {
 		for _, p := range positions {
 			ps, _ := p["symbol"].(string)
-			sideRaw, _ := p["side"].(string)
-			sizeVal := 0.0
-			switch v := p["positionAmt"].(type) {
-			case string:
-				sizeVal, _ = strconv.ParseFloat(v, 64)
-			case float64:
-				sizeVal = v
+			if ps != symbol {
+				continue
 			}
-			if ps == symbol && sizeVal != 0 {
-				long := sizeVal > 0
-				if (long && side == "long") || (!long && side == "short") || sideRaw == side {
-					if sizeVal < 0 {
-						sizeVal = -sizeVal
-					}
-					if sizeVal < available {
-						available = sizeVal
-					}
+			sizeVal, isLong := parsePositionSize(p)
+			if sizeVal == 0 {
+				continue
+			}
+			if (isLong && side == "long") || (!isLong && side == "short") {
+				if sizeVal < available {
+					available = sizeVal
 				}
 			}
 		}
 	}
 	if available <= 0 {
 		return fmt.Errorf("insufficient_position")
+	}
+	// 回写决策数量便于审计
+	if dec != nil && available < dec.FollowerQty {
+		dec.FollowerQty = available
 	}
 
 	switch side {
@@ -178,7 +185,10 @@ func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string
 			o.ErrCode = dec.ErrCode
 		}
 		if dec.MinNotionalHit || dec.MaxNotionalHit {
-			o.SkipReason = fmt.Sprintf("min_hit=%v,max_hit=%v", dec.MinNotionalHit, dec.MaxNotionalHit)
+			// 仅在无错误时记录阈值命中，避免混用
+			if err == nil {
+				o.SkipReason = fmt.Sprintf("min_hit=%v,max_hit=%v", dec.MinNotionalHit, dec.MaxNotionalHit)
+			}
 		}
 	}
 	if order != nil {
@@ -197,8 +207,18 @@ func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string
 	if o.OrderID == "" {
 		if dec != nil && dec.ProviderEvent.TraceID != "" {
 			o.OrderID = dec.ProviderEvent.TraceID
+			o.ErrCode = "unsyncable_order_id"
+			o.Status = "ERROR"
+			if o.SkipReason == "" {
+				o.SkipReason = "missing_order_id"
+			}
 		} else {
-			o.OrderID = fmt.Sprintf("%s-%d", symbol, time.Now().UnixNano())
+			o.OrderID = fmt.Sprintf("tmp-%s-%d", symbol, time.Now().UnixNano())
+			o.ErrCode = "unsyncable_order_id"
+			o.Status = "ERROR"
+			if o.SkipReason == "" {
+				o.SkipReason = "missing_order_id"
+			}
 		}
 	}
 	if err != nil {
@@ -213,4 +233,41 @@ func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string
 		}
 	}
 	e.OrderLogger(o, dec, err)
+}
+
+// parsePositionSize 尝试解析统一的仓位数量与方向。
+func parsePositionSize(p map[string]interface{}) (size float64, isLong bool) {
+	// 方向优先使用 posSide/positionSide
+	if ps, ok := p["posSide"].(string); ok && ps != "" {
+		ps = strings.ToLower(ps)
+		switch ps {
+		case "long":
+			isLong = true
+		case "short":
+			isLong = false
+		}
+	}
+	switch v := p["positionAmt"].(type) {
+	case string:
+		size, _ = strconv.ParseFloat(v, 64)
+	case float64:
+		size = v
+	}
+	if size == 0 {
+		// 尝试读取 size/qty 字段
+		switch v := p["size"].(type) {
+		case string:
+			size, _ = strconv.ParseFloat(v, 64)
+		case float64:
+			size = v
+		}
+	}
+	if size != 0 && !isLong {
+		// 未由 posSide 指定方向，则用正负判断
+		isLong = size > 0
+	}
+	if size < 0 {
+		size = -size
+	}
+	return size, isLong
 }

@@ -139,19 +139,13 @@ func (m *OrderSyncManager) syncTraderOrders(traderID string, orders []*store.Tra
 func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrder) {
 	status, err := trader.GetOrderStatus(order.Symbol, order.OrderID)
 	if err != nil {
-		// 查询失败，检查订单创建时间，超过一定时间假设已成交
-		if time.Since(order.CreatedAt) > 5*time.Minute {
-			logger.Infof("⚠️  订单查询超时，假设已成交 (ID: %s)", order.OrderID)
-			m.markOrderFilled(order, 0, 0, 0)
-		} else {
-			order.Status = "ERROR"
-			order.SkipReason = fmt.Sprintf("query_failed: %v", err)
-			order.ErrCode = "status_query_failed"
-			if order.PriceSource == "" {
-				order.PriceSource = "copy"
-			}
-			_ = m.store.Order().Update(order)
+		order.Status = "ERROR"
+		order.SkipReason = fmt.Sprintf("query_failed: %v", err)
+		order.ErrCode = "status_query_failed"
+		if order.PriceSource == "" {
+			order.PriceSource = "copy"
 		}
+		_ = m.store.Order().Update(order)
 		return
 	}
 

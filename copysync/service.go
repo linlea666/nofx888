@@ -32,6 +32,7 @@ type CopyDecision struct {
 	Skipped         bool          `json:"skipped"`
 	SkipReason      string        `json:"skip_reason"`
 	CopySkipReason  string        `json:"copy_skip_reason"`
+	ErrCode         string        `json:"err_code"`
 	// 公式展示辅助
 	Formula string `json:"formula"`
 }
@@ -80,6 +81,7 @@ func (s *Service) logSkip(ev ProviderEvent, reason string) {
 		Skipped:        true,
 		SkipReason:     reason,
 		CopySkipReason: reason,
+		ErrCode:        reason,
 	}
 	s.loggerCb(dec)
 }
@@ -241,6 +243,7 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		decision.Skipped = true
 		decision.SkipReason = err.Error()
 		decision.CopySkipReason = ClassifyErr(decision.SkipReason)
+		decision.ErrCode = decision.CopySkipReason
 		logger.Infof("copysync: execute %s %s failed: %v (trace=%s)", ev.Symbol, ev.Action, err, ev.TraceID)
 		if s.loggerCb != nil {
 			s.loggerCb(decision)
@@ -270,17 +273,17 @@ func (s *Service) shouldFollow(action string) bool {
 }
 
 func (s *Service) retrySnapshot() {
-	for i := 0; i < 3; i++ {
+	for attempt := 1; ; attempt++ {
 		select {
 		case <-s.ctx.Done():
 			return
-		case <-time.After(5 * time.Second):
+		case <-time.After(10 * time.Second):
 			snap, err := s.provider.Snapshot(s.ctx)
 			if err != nil {
-				logger.Warnf("copysync: retry snapshot failed (%d/3): %v", i+1, err)
+				logger.Warnf("copysync: retry snapshot failed (%d): %v", attempt, err)
 				continue
 			}
-			logger.Infof("copysync: snapshot retry success")
+			logger.Infof("copysync: snapshot retry success after %d attempt(s)", attempt)
 			s.SetBaseline(snap)
 			return
 		}

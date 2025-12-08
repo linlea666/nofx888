@@ -9,12 +9,20 @@ func ClassifyErr(msg string) string {
 	}
 	l := strings.ToLower(msg)
 	switch {
+	case strings.Contains(l, "price_fallback_failed"):
+		return "price_fallback_failed"
 	case strings.Contains(l, "min qty"):
 		return "min_qty_not_met"
 	case strings.Contains(l, "min notional"):
 		return "min_notional_not_met"
 	case strings.Contains(l, "insufficient"):
 		return "insufficient_balance"
+	case strings.Contains(l, "leader_notional"):
+		return "leader_notional_missing"
+	case strings.Contains(l, "follower_equity"):
+		return "follower_equity_missing"
+	case strings.Contains(l, "status_query_failed"):
+		return "status_query_failed"
 	case strings.Contains(l, "price"):
 		return "price_missing"
 	case strings.Contains(l, "query_failed"):

@@ -87,6 +87,8 @@ func (e *TraderExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecision
 	default:
 		return fmt.Errorf("copysync: unknown action %s", decision.ProviderEvent.Action)
 	}
+}
+
 func (e *TraderExecutor) open(dec *CopyDecision, side, symbol string, qty float64, lev float64) error {
 	switch side {
 	case "long":
@@ -141,6 +143,12 @@ func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string
 		if o.Price == 0 {
 			o.Price = dec.Price
 		}
+		if dec.ErrCode != "" {
+			o.ErrCode = dec.ErrCode
+		}
+		if dec.MinNotionalHit || dec.MaxNotionalHit {
+			o.SkipReason = fmt.Sprintf("min_hit=%v,max_hit=%v", dec.MinNotionalHit, dec.MaxNotionalHit)
+		}
 	}
 	if order != nil {
 		if id, ok := order["orderId"]; ok {
@@ -164,8 +172,14 @@ func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string
 	}
 	if err != nil {
 		o.Status = "ERROR"
-		o.SkipReason = err.Error()
-		o.ErrCode = ClassifyErr(err.Error())
+		if o.SkipReason != "" {
+			o.SkipReason = o.SkipReason + ";" + err.Error()
+		} else {
+			o.SkipReason = err.Error()
+		}
+		if o.ErrCode == "" {
+			o.ErrCode = ClassifyErr(err.Error())
+		}
 	}
 	e.OrderLogger(o, dec, err)
 }

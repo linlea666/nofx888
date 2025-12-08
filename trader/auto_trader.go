@@ -333,6 +333,9 @@ func (at *AutoTrader) Run() error {
 				if o.Price == 0 {
 					o.Price = dec.Price
 				}
+				if dec.ErrCode != "" {
+					o.ErrCode = dec.ErrCode
+				}
 				if o.OrderID == "" && dec.ProviderEvent.TraceID != "" {
 					o.OrderID = dec.ProviderEvent.TraceID
 				}
@@ -384,7 +387,7 @@ func (at *AutoTrader) Run() error {
 					DecisionJSON:     string(decJSON), // 保存跟单决策详情
 					Success:          !dec.Skipped,
 					ErrorMessage:     dec.SkipReason,
-					ErrCode:          dec.CopySkipReason,
+					ErrCode:          dec.ErrCode,
 					TraceID:          ce.TraceID,
 					ProviderType:     ce.ProviderType,
 					LeaderEquity:     ce.LeaderEquity,

@@ -247,6 +247,31 @@ func (s *OrderStore) Update(order *TraderOrder) error {
 	return nil
 }
 
+// Upsert 尝试按 order_id 或 trace_id 更新已有记录，否则创建。
+func (s *OrderStore) Upsert(order *TraderOrder) error {
+	if order.OrderID != "" {
+		if _, err := s.GetByOrderID(order.TraderID, order.OrderID); err == nil {
+			return s.Update(order)
+		}
+	}
+	if order.TraceID != "" {
+		if existing, err := s.GetByTraceID(order.TraderID, order.TraceID); err == nil && existing != nil {
+			// 合并关键字段
+			if order.OrderID == "" {
+				order.OrderID = existing.OrderID
+			}
+			if order.ClientOrderID == "" {
+				order.ClientOrderID = existing.ClientOrderID
+			}
+			if order.Status == "" {
+				order.Status = existing.Status
+			}
+			return s.Update(order)
+		}
+	}
+	return s.Create(order)
+}
+
 // GetByOrderID 根据订单ID获取订单
 func (s *OrderStore) GetByOrderID(traderID, orderID string) (*TraderOrder, error) {
 	var order TraderOrder
@@ -264,6 +289,44 @@ func (s *OrderStore) GetByOrderID(traderID, orderID string) (*TraderOrder, error
 		&order.OrderType, &order.Quantity, &order.Price, &order.AvgPrice,
 		&order.ExecutedQty, &order.Leverage, &order.Status, &order.Fee,
 		&order.FeeAsset, &order.RealizedPnL, &order.EntryPrice,
+		&createdAt, &updatedAt, &filledAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if createdAt.Valid {
+		order.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
+	}
+	if updatedAt.Valid {
+		order.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt.String)
+	}
+	if filledAt.Valid {
+		order.FilledAt, _ = time.Parse(time.RFC3339, filledAt.String)
+	}
+
+	return &order, nil
+}
+
+// GetByTraceID 根据 trace_id 获取订单
+func (s *OrderStore) GetByTraceID(traderID, traceID string) (*TraderOrder, error) {
+	var order TraderOrder
+	var createdAt, updatedAt, filledAt sql.NullString
+
+	err := s.db.QueryRow(`
+		SELECT trader_id, order_id, client_order_id, symbol, side, position_side,
+			action, order_type, quantity, price, avg_price, executed_qty,
+			leverage, status, fee, fee_asset, realized_pnl, entry_price,
+			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code, min_hit, max_hit,
+			created_at, updated_at, filled_at
+		FROM trader_orders WHERE trader_id = ? AND trace_id = ?
+	`, traderID, traceID).Scan(
+		&order.TraderID, &order.OrderID, &order.ClientOrderID,
+		&order.Symbol, &order.Side, &order.PositionSide, &order.Action,
+		&order.OrderType, &order.Quantity, &order.Price, &order.AvgPrice,
+		&order.ExecutedQty, &order.Leverage, &order.Status, &order.Fee,
+		&order.FeeAsset, &order.RealizedPnL, &order.EntryPrice,
+		&order.TraceID, &order.ProviderType, &order.PriceSource, &order.LeaderPrice, &order.LeaderNotional, &order.CopyRatio, &order.SkipReason, &order.ErrCode, &order.MinHit, &order.MaxHit,
 		&createdAt, &updatedAt, &filledAt,
 	)
 	if err != nil {

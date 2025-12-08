@@ -13,7 +13,11 @@ func ClassifyErr(msg string) string {
 		return "price_fallback_failed"
 	case strings.Contains(l, "price_format_zero"):
 		return "price_format_zero"
+	case strings.Contains(l, "formatted to zero"):
+		return "price_format_zero"
 	case strings.Contains(l, "exchange_price"):
+		return "exchange_price_reject"
+	case strings.Contains(l, "reject") && strings.Contains(l, "price"):
 		return "exchange_price_reject"
 	case strings.Contains(l, "min qty"):
 		return "min_qty_not_met"

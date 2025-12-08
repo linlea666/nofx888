@@ -352,7 +352,7 @@ func (at *AutoTrader) Run() error {
 				o.ErrCode = copysync.ClassifyErr(execErr.Error())
 			}
 			// 写入订单表，避免重复
-			if err := at.store.Order().Create(o); err != nil {
+			if err := at.store.Order().Upsert(o); err != nil {
 				logger.Infof("⚠️ [%s] 写订单日志失败: %v", at.name, err)
 			}
 		}

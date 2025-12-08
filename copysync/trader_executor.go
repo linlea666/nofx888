@@ -105,13 +105,43 @@ func (e *TraderExecutor) open(dec *CopyDecision, side, symbol string, qty float6
 }
 
 func (e *TraderExecutor) close(dec *CopyDecision, side, symbol string, qty float64) error {
+	// 防超量平仓：读取当前持仓截断
+	available := qty
+	if positions, err := e.Trader.GetPositions(); err == nil {
+		for _, p := range positions {
+			ps, _ := p["symbol"].(string)
+			sideRaw, _ := p["side"].(string)
+			sizeVal := 0.0
+			switch v := p["positionAmt"].(type) {
+			case string:
+				sizeVal, _ = strconv.ParseFloat(v, 64)
+			case float64:
+				sizeVal = v
+			}
+			if ps == symbol && sizeVal != 0 {
+				long := sizeVal > 0
+				if (long && side == "long") || (!long && side == "short") || sideRaw == side {
+					if sizeVal < 0 {
+						sizeVal = -sizeVal
+					}
+					if sizeVal < available {
+						available = sizeVal
+					}
+				}
+			}
+		}
+	}
+	if available <= 0 {
+		return fmt.Errorf("insufficient_position")
+	}
+
 	switch side {
 	case "long":
-		order, err := e.Trader.CloseLong(symbol, qty)
+		order, err := e.Trader.CloseLong(symbol, available)
 		e.logOrder(dec, symbol, side, "close_long", qty, 0, order, err)
 		return err
 	case "short":
-		order, err := e.Trader.CloseShort(symbol, qty)
+		order, err := e.Trader.CloseShort(symbol, available)
 		e.logOrder(dec, symbol, side, "close_short", qty, 0, order, err)
 		return err
 	default:

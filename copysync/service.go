@@ -160,14 +160,23 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 
 	// 基线过滤：已有仓位不跟（直到归零后重新开仓）
 	if s.baseline != nil && s.baseline.Positions != nil {
-		keyLong := fmt.Sprintf("%s_long", ev.Symbol)
-		keyShort := fmt.Sprintf("%s_short", ev.Symbol)
-		if s.baseline.Positions[keyLong] != nil || s.baseline.Positions[keyShort] != nil {
-			// 如果是 close 动作允许通过，否则跳过
-			if ev.Action != "close" && ev.Action != "reduce" {
-				logger.Infof("copysync: skip %s %s due to baseline position", ev.Symbol, ev.Action)
-				s.logSkip(ev, "baseline_skip")
-				return
+		// 快照过期则忽略基线
+		if !s.baseline.Timestamp.IsZero() && time.Since(s.baseline.Timestamp) > 2*time.Hour {
+			logger.Infof("copysync: baseline expired, ignore for %s", ev.Symbol)
+		} else {
+			keyLong := fmt.Sprintf("%s_long", ev.Symbol)
+			keyShort := fmt.Sprintf("%s_short", ev.Symbol)
+			pos := s.baseline.Positions[keyLong]
+			if pos == nil {
+				pos = s.baseline.Positions[keyShort]
+			}
+			if pos != nil && pos.Size > 0 {
+				// 如果是 close 动作允许通过，否则跳过
+				if ev.Action != "close" && ev.Action != "reduce" {
+					logger.Infof("copysync: skip %s %s due to baseline position", ev.Symbol, ev.Action)
+					s.logSkip(ev, "baseline_skip")
+					return
+				}
 			}
 		}
 	}

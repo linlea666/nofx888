@@ -632,6 +632,31 @@ func getFundingRate(symbol string) (float64, error) {
 	return rate, nil
 }
 
+// GetMarkPrice 获取标记价格，作为兜底价源。
+func GetMarkPrice(symbol string) (float64, error) {
+	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/premiumIndex?symbol=%s", Normalize(symbol))
+	apiClient := NewAPIClient()
+	resp, err := apiClient.client.Get(url)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+
+	var result struct {
+		MarkPrice string `json:"markPrice"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0, err
+	}
+	mp, _ := strconv.ParseFloat(result.MarkPrice, 64)
+	return mp, nil
+}
+
 // Format 格式化输出市场数据
 func Format(data *Data) string {
 	var sb strings.Builder

@@ -57,13 +57,30 @@ func NewServiceForTrader(cfg CopyConfig, followerTrader trader.Trader, traderID 
 		orderLogger(o, dec, execErr)
 	}
 
-	// 行情兜底价
-	priceFunc := func(symbol string) (float64, error) {
+	// 行情兜底价：先用最新成交价，再尝试 mark / mid 价
+	priceFunc := func(symbol string) (float64, string, error) {
 		data, err := market.Get(symbol)
-		if err != nil {
-			return 0, err
+		if err == nil && data != nil {
+			if data.CurrentPrice > 0 {
+				return data.CurrentPrice, "last", nil
+			}
+			// mid 价：取主时间框 mid 末值
+			if data.TimeframeData != nil {
+				for _, tf := range data.TimeframeData {
+					if tf != nil && len(tf.MidPrices) > 0 {
+						last := tf.MidPrices[len(tf.MidPrices)-1]
+						if last > 0 {
+							return last, "mid", nil
+						}
+					}
+				}
+			}
 		}
-		return data.CurrentPrice, nil
+		// mark 价兜底
+		if mp, err := market.GetMarkPrice(symbol); err == nil && mp > 0 {
+			return mp, "mark", nil
+		}
+		return 0, "", fmt.Errorf("price_fallback_failed")
 	}
 
 	service := NewService(cfg, provider, account, exec, priceFunc)

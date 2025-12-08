@@ -45,7 +45,7 @@ type Service struct {
 	provider  Provider
 	account   FollowerAccount
 	executor  ExecutionAdapter
-	priceFunc func(symbol string) (float64, error) // 行情兜底
+	priceFunc func(symbol string) (float64, string, error) // 行情兜底，返回价格及价源
 	loggerCb  func(decision *CopyDecision)
 
 	ctx      context.Context
@@ -55,7 +55,7 @@ type Service struct {
 }
 
 // NewService 创建 CopySync 服务。
-func NewService(cfg CopyConfig, provider Provider, account FollowerAccount, executor ExecutionAdapter, priceFallback func(symbol string) (float64, error)) *Service {
+func NewService(cfg CopyConfig, provider Provider, account FollowerAccount, executor ExecutionAdapter, priceFallback func(symbol string) (float64, string, error)) *Service {
 	cfg.EnsureDefaults()
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{
@@ -198,13 +198,16 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	if price <= 0 && s.cfg.PriceFallbackEnabled && s.priceFunc != nil {
 		backoffs := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond}
 		for i, d := range backoffs {
-			if p, err := s.priceFunc(ev.Symbol); err == nil && p > 0 {
+			if p, src, err := s.priceFunc(ev.Symbol); err == nil && p > 0 {
 				price = p
-				priceSource = "market"
+				if src != "" {
+					priceSource = src
+				} else {
+					priceSource = "market"
+				}
 				break
 			}
 			time.Sleep(d)
-			// 如支持 mark/mid 可在此扩展备用价源
 			if i == len(backoffs)-1 && price <= 0 {
 				ev.ErrCode = "price_fallback_failed"
 				s.logSkip(ev, "price_fallback_failed")

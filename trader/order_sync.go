@@ -167,15 +167,15 @@ func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrd
 			logger.Infof("⚠️  查询订单失败，重试(%d/3) ID=%s err=%v", cnt, order.OrderID, err)
 			return
 		}
-	order.Status = "ERROR"
-	order.SkipReason = fmt.Sprintf("query_failed: %v", err)
-	order.ErrCode = "status_query_failed"
-	if order.PriceSource == "" {
-		order.PriceSource = "copy"
-	}
-	m.badIDs[order.OrderID] = true
-	m.errMap[order.OrderID] = order.ErrCode
-	_ = m.store.Order().Update(order)
+		order.Status = "ERROR"
+		order.SkipReason = fmt.Sprintf("query_failed after %d retries: %v", cnt, err)
+		order.ErrCode = "status_query_failed"
+		if order.PriceSource == "" {
+			order.PriceSource = "copy"
+		}
+		m.badIDs[order.OrderID] = true
+		m.errMap[order.OrderID] = order.ErrCode
+		_ = m.store.Order().Update(order)
 		return
 	}
 	// 查询成功清理重试计数

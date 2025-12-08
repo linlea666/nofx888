@@ -196,6 +196,16 @@ export function DecisionCard({ decision, language }: DecisionCardProps) {
               错误码: {decision.err_code || '-'} {decision.copy_skip_reason ? `(原因: ${decision.copy_skip_reason})` : ''}
             </div>
           )}
+          {decision.skip_reason && (
+            <div className="text-[#F87171]">
+              描述: {decision.skip_reason}
+            </div>
+          )}
+          {decision.err_code === 'unsyncable_order_id' && (
+            <div className="text-[#FBBF24]">
+              提示: 此订单无交易所ID，不参与状态同步
+            </div>
+          )}
         </div>
       )}
 

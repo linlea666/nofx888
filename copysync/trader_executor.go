@@ -124,7 +124,7 @@ func (e *TraderExecutor) close(dec *CopyDecision, side, symbol string, qty float
 			if ps != symbol {
 				continue
 			}
-			sizeVal, isLong := parsePositionSize(p)
+	_, sizeVal, isLong := parsePosition(p)
 			if sizeVal == 0 {
 				continue
 			}
@@ -230,11 +230,8 @@ func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string
 	}
 	if err != nil {
 		o.Status = "ERROR"
-		if o.SkipReason != "" {
-			o.SkipReason = o.SkipReason + ";" + err.Error()
-		} else {
-			o.SkipReason = err.Error()
-		}
+		// skip_reason 仅保留文案
+		o.SkipReason = err.Error()
 		if o.ErrCode == "" {
 			o.ErrCode = ClassifyErr(err.Error())
 		}
@@ -242,47 +239,8 @@ func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string
 	e.OrderLogger(o, dec, err)
 }
 
-// parsePositionSize 尝试解析统一的仓位数量与方向。
+// parsePositionSize 保留向后兼容调用，内部复用通用解析。
 func parsePositionSize(p map[string]interface{}) (size float64, isLong bool) {
-	// 方向优先使用 posSide/positionSide
-	if ps, ok := p["posSide"].(string); ok && ps != "" {
-		ps = strings.ToLower(ps)
-		switch ps {
-		case "long":
-			isLong = true
-		case "short":
-			isLong = false
-		}
-	}
-	if ps, ok := p["positionSide"].(string); ok && ps != "" && !isLong {
-		ps = strings.ToLower(ps)
-		if ps == "long" {
-			isLong = true
-		} else if ps == "short" {
-			isLong = false
-		}
-	}
-	switch v := p["positionAmt"].(type) {
-	case string:
-		size, _ = strconv.ParseFloat(v, 64)
-	case float64:
-		size = v
-	}
-	if size == 0 {
-		// 尝试读取 size/qty 字段
-		switch v := p["size"].(type) {
-		case string:
-			size, _ = strconv.ParseFloat(v, 64)
-		case float64:
-			size = v
-		}
-	}
-	if size != 0 && !isLong {
-		// 未由 posSide 指定方向，则用正负判断
-		isLong = size > 0
-	}
-	if size < 0 {
-		size = -size
-	}
-	return size, isLong
+	_, size, isLong = parsePosition(p)
+	return
 }

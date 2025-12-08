@@ -33,8 +33,8 @@ type CopyDecision struct {
 	MaxNotionalHit  bool          `json:"max_notional_hit"`
 	Skipped         bool          `json:"skipped"`
 	SkipReason      string        `json:"skip_reason"`
-	CopySkipReason  string        `json:"copy_skip_reason"`
-	ErrCode         string        `json:"err_code"`
+	CopySkipReason  string        `json:"copy_skip_reason"` // 文案
+	ErrCode         string        `json:"err_code"`         // 分类错误码
 	// 公式展示辅助
 	Formula string `json:"formula"`
 }
@@ -83,7 +83,7 @@ func (s *Service) logSkip(ev ProviderEvent, reason string) {
 		Skipped:        true,
 		SkipReason:     reason,
 		CopySkipReason: reason,
-		ErrCode:        reason,
+		ErrCode:        ClassifyErr(reason),
 	}
 	s.loggerCb(dec)
 }
@@ -204,9 +204,10 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 				break
 			}
 			time.Sleep(d)
+			// 如支持 mark/mid 可在此扩展备用价源
 			if i == len(backoffs)-1 && price <= 0 {
 				ev.ErrCode = "price_fallback_failed"
-				s.logSkip(ev, "获取价格失败")
+				s.logSkip(ev, "price_fallback_failed")
 				return
 			}
 		}
@@ -269,8 +270,7 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	if err := s.executor.ExecuteCopy(s.ctx, decision); err != nil {
 		decision.Skipped = true
 		decision.SkipReason = err.Error()
-		decision.CopySkipReason = ClassifyErr(decision.SkipReason)
-		decision.ErrCode = decision.CopySkipReason
+		decision.ErrCode = ClassifyErr(decision.SkipReason)
 		logger.Infof("copysync: execute %s %s failed: %v (trace=%s)", ev.Symbol, ev.Action, err, ev.TraceID)
 		if s.loggerCb != nil {
 			s.loggerCb(decision)
@@ -350,16 +350,11 @@ func (s *Service) followerHasPosition(symbol, side string) bool {
 		return false
 	}
 	for _, p := range positions {
-		ps, _ := p["symbol"].(string)
-		if ps != symbol {
-			continue
-		}
-		size, isLong := parseFollowerPosition(p)
-		if size == 0 {
-			continue
-		}
-		if (side == "long" && isLong) || (side == "short" && !isLong) {
-			return true
+		ps, size, isLong := parsePosition(p)
+		if ps == symbol && size > 0 {
+			if (side == "long" && isLong) || (side == "short" && !isLong) {
+				return true
+			}
 		}
 	}
 	return false
@@ -379,76 +374,31 @@ func (s *Service) reconcileFollowerPositions() {
 		return
 	}
 	for _, p := range positions {
-		ps, _ := p["symbol"].(string)
-		if ps == "" {
-			continue
-		}
-		size, isLong := parseFollowerPosition(p)
-		if size <= 0 {
+		sym, size, isLong := parsePosition(p)
+		if sym == "" || size <= 0 {
 			continue
 		}
 		side := "long"
 		if !isLong {
 			side = "short"
 		}
-		key := fmt.Sprintf("%s_%s", ps, side)
+		key := fmt.Sprintf("%s_%s", sym, side)
 		basePos := s.baseline.Positions[key]
 		if basePos == nil || basePos.Size <= 0 {
-			logger.Warnf("copysync: reconcile close residual position %s %s size=%.4f", ps, side, size)
-			_ = te.close(nil, side, ps, size)
+			logger.Warnf("copysync: reconcile close residual position %s %s size=%.4f", sym, side, size)
+			_ = te.close(nil, side, sym, size)
 			continue
 		}
 		// 方向一致但数量超出基线，平掉差额
 		if size > basePos.Size {
 			diff := size - basePos.Size
-			logger.Warnf("copysync: reconcile trim position %s %s diff=%.4f", ps, side, diff)
-			_ = te.close(nil, side, ps, diff)
+			logger.Warnf("copysync: reconcile trim position %s %s diff=%.4f", sym, side, diff)
+			_ = te.close(nil, side, sym, diff)
 		}
 		// 方向相反（基线方向与当前不符），平掉当前全部
 		if basePos.Side != "" && basePos.Side != side {
-			logger.Warnf("copysync: reconcile opposite position %s follower=%s base=%s size=%.4f", ps, side, basePos.Side, size)
-			_ = te.close(nil, side, ps, size)
+			logger.Warnf("copysync: reconcile opposite position %s follower=%s base=%s size=%.4f", sym, side, basePos.Side, size)
+			_ = te.close(nil, side, sym, size)
 		}
 	}
-}
-
-// parseFollowerPosition 兼容不同交易所的持仓方向/数量字段。
-func parseFollowerPosition(p map[string]interface{}) (size float64, isLong bool) {
-	if ps, ok := p["posSide"].(string); ok && ps != "" {
-		ps = strings.ToLower(ps)
-		if ps == "long" {
-			isLong = true
-		} else if ps == "short" {
-			isLong = false
-		}
-	}
-	if ps, ok := p["positionSide"].(string); ok && ps != "" && !isLong {
-		ps = strings.ToLower(ps)
-		if ps == "long" {
-			isLong = true
-		} else if ps == "short" {
-			isLong = false
-		}
-	}
-	switch v := p["positionAmt"].(type) {
-	case string:
-		size, _ = strconv.ParseFloat(v, 64)
-	case float64:
-		size = v
-	}
-	if size == 0 {
-		switch v := p["size"].(type) {
-		case string:
-			size, _ = strconv.ParseFloat(v, 64)
-		case float64:
-			size = v
-		}
-	}
-	if size != 0 && !isLong {
-		isLong = size > 0
-	}
-	if size < 0 {
-		size = -size
-	}
-	return
 }

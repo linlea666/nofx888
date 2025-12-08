@@ -143,6 +143,13 @@ func (m *OrderSyncManager) syncTraderOrders(traderID string, orders []*store.Tra
 		if order.ErrCode == "unsyncable_order_id" || strings.HasPrefix(order.OrderID, "tmp-") || m.badIDs[order.OrderID] {
 			continue
 		}
+		// 填充 syncable/last_err 方便前端
+		order.Syncable = !(order.ErrCode == "unsyncable_order_id" || strings.HasPrefix(order.OrderID, "tmp-") || m.badIDs[order.OrderID])
+		if !order.Syncable {
+			if e, ok := m.errMap[order.OrderID]; ok {
+				order.ErrCode = e
+			}
+		}
 		m.syncSingleOrder(trader, order)
 	}
 }
@@ -160,15 +167,15 @@ func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrd
 			logger.Infof("⚠️  查询订单失败，重试(%d/3) ID=%s err=%v", cnt, order.OrderID, err)
 			return
 		}
-		order.Status = "ERROR"
-		order.SkipReason = fmt.Sprintf("query_failed: %v", err)
-		order.ErrCode = "status_query_failed"
-		if order.PriceSource == "" {
-			order.PriceSource = "copy"
-		}
-		m.badIDs[order.OrderID] = true
-		m.errMap[order.OrderID] = order.ErrCode
-		_ = m.store.Order().Update(order)
+	order.Status = "ERROR"
+	order.SkipReason = fmt.Sprintf("query_failed: %v", err)
+	order.ErrCode = "status_query_failed"
+	if order.PriceSource == "" {
+		order.PriceSource = "copy"
+	}
+	m.badIDs[order.OrderID] = true
+	m.errMap[order.OrderID] = order.ErrCode
+	_ = m.store.Order().Update(order)
 		return
 	}
 	// 查询成功清理重试计数

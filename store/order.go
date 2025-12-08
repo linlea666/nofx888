@@ -180,6 +180,7 @@ func (s *OrderStore) ListLatest(traderID string, n int) ([]*TraderOrder, error) 
 		}
 		o.MinHit = minHit.Bool
 		o.MaxHit = maxHit.Bool
+		o.Syncable = o.ErrCode != "unsyncable_order_id" && !strings.HasPrefix(o.OrderID, "tmp-")
 		if createdAt.Valid {
 			o.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
 		}

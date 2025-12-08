@@ -224,6 +224,8 @@ export default function TraderDashboard() {
                 <th className="px-2 py-1">动作</th>
                 <th className="px-2 py-1">数量</th>
                 <th className="px-2 py-1">价格</th>
+                <th className="px-2 py-1">命中最小</th>
+                <th className="px-2 py-1">命中最大</th>
                 <th className="px-2 py-1">状态</th>
                 <th className="px-2 py-1">价源</th>
                 <th className="px-2 py-1">错误码</th>
@@ -238,6 +240,8 @@ export default function TraderDashboard() {
                   <td className="px-2 py-1">{o.action}</td>
                   <td className="px-2 py-1">{o.quantity}</td>
                   <td className="px-2 py-1">{o.price ?? '-'}</td>
+                  <td className="px-2 py-1">{o.min_hit ? '是' : ''}</td>
+                  <td className="px-2 py-1">{o.max_hit ? '是' : ''}</td>
                   <td className="px-2 py-1">{o.status}</td>
                   <td className="px-2 py-1">{o.price_source || '-'}</td>
                   <td className="px-2 py-1">{o.err_code || o.skip_reason || '-'}</td>

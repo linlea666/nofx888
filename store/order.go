@@ -281,6 +281,7 @@ func (s *OrderStore) GetByOrderID(traderID, orderID string) (*TraderOrder, error
 		SELECT id, trader_id, order_id, client_order_id, symbol, side, position_side,
 			action, order_type, quantity, price, avg_price, executed_qty,
 			leverage, status, fee, fee_asset, realized_pnl, entry_price,
+			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code, min_hit, max_hit,
 			created_at, updated_at, filled_at
 		FROM trader_orders WHERE trader_id = ? AND order_id = ?
 	`, traderID, orderID).Scan(
@@ -289,6 +290,7 @@ func (s *OrderStore) GetByOrderID(traderID, orderID string) (*TraderOrder, error
 		&order.OrderType, &order.Quantity, &order.Price, &order.AvgPrice,
 		&order.ExecutedQty, &order.Leverage, &order.Status, &order.Fee,
 		&order.FeeAsset, &order.RealizedPnL, &order.EntryPrice,
+		&order.TraceID, &order.ProviderType, &order.PriceSource, &order.LeaderPrice, &order.LeaderNotional, &order.CopyRatio, &order.SkipReason, &order.ErrCode, &order.MinHit, &order.MaxHit,
 		&createdAt, &updatedAt, &filledAt,
 	)
 	if err != nil {

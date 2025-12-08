@@ -333,6 +333,8 @@ func (at *AutoTrader) Run() error {
 				if o.Price == 0 {
 					o.Price = dec.Price
 				}
+				o.MinHit = dec.MinNotionalHit
+				o.MaxHit = dec.MaxNotionalHit
 				if dec.ErrCode != "" {
 					o.ErrCode = dec.ErrCode
 				}

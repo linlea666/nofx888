@@ -310,6 +310,7 @@ func (s *Service) retrySnapshot() {
 			}
 			logger.Infof("copysync: snapshot retry success after %d attempt(s)", attempt)
 			s.SetBaseline(snap)
+			s.reconcileFollowerPositions()
 			return
 		}
 	}
@@ -331,6 +332,7 @@ func (s *Service) refreshBaselineLoop() {
 			}
 			s.SetBaseline(snap)
 			logger.Infof("copysync: baseline refreshed at %s", time.Now().Format(time.RFC3339))
+			s.reconcileFollowerPositions()
 		}
 	}
 }
@@ -359,6 +361,42 @@ func (s *Service) followerHasPosition(symbol, side string) bool {
 		}
 	}
 	return false
+}
+
+// reconcileFollowerPositions 对比基线和跟随端持仓，必要时强制平掉残留/反向仓。
+func (s *Service) reconcileFollowerPositions() {
+	te, ok := s.executor.(*TraderExecutor)
+	if !ok || te == nil || te.Trader == nil {
+		return
+	}
+	if s.baseline == nil || s.baseline.Positions == nil {
+		return
+	}
+	positions, err := te.Trader.GetPositions()
+	if err != nil {
+		return
+	}
+	for _, p := range positions {
+		ps, _ := p["symbol"].(string)
+		if ps == "" {
+			continue
+		}
+		size, isLong := parseFollowerPosition(p)
+		if size <= 0 {
+			continue
+		}
+		side := "long"
+		if !isLong {
+			side = "short"
+		}
+		key := fmt.Sprintf("%s_%s", ps, side)
+		basePos := s.baseline.Positions[key]
+		// 基线无仓或方向不符时，尝试平掉残留
+		if basePos == nil || basePos.Size <= 0 {
+			logger.Warnf("copysync: reconcile close residual position %s %s size=%.4f", ps, side, size)
+			_ = te.close(nil, side, ps, size)
+		}
+	}
 }
 
 // parseFollowerPosition 兼容不同交易所的持仓方向/数量字段。

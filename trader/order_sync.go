@@ -19,6 +19,8 @@ type OrderSyncManager struct {
 	traderCache  map[string]Trader // trader_id -> Trader 实例缓存
 	configCache  map[string]*store.TraderFullConfig // trader_id -> 配置缓存
 	cacheMutex   sync.RWMutex
+	retryMutex   sync.Mutex
+	retryCount   map[string]int // order_id -> retry 次数
 }
 
 // NewOrderSyncManager 创建订单同步管理器
@@ -32,6 +34,7 @@ func NewOrderSyncManager(st *store.Store, interval time.Duration) *OrderSyncMana
 		stopCh:      make(chan struct{}),
 		traderCache: make(map[string]Trader),
 		configCache: make(map[string]*store.TraderFullConfig),
+		retryCount:  make(map[string]int),
 	}
 }
 
@@ -144,9 +147,13 @@ func (m *OrderSyncManager) syncTraderOrders(traderID string, orders []*store.Tra
 func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrder) {
 	status, err := trader.GetOrderStatus(order.Symbol, order.OrderID)
 	if err != nil {
-		// 对暂态错误设置退避：创建2分钟内不降级，超过则标 ERROR
-		if time.Since(order.CreatedAt) < 2*time.Minute {
-			logger.Infof("⚠️  查询订单失败，暂不降级 (ID: %s): %v", order.OrderID, err)
+		m.retryMutex.Lock()
+		cnt := m.retryCount[order.OrderID] + 1
+		m.retryCount[order.OrderID] = cnt
+		m.retryMutex.Unlock()
+		// 退避：前 3 次直接跳过，不降级；超过则标 ERROR
+		if cnt <= 3 {
+			logger.Infof("⚠️  查询订单失败，重试(%d/3) ID=%s err=%v", cnt, order.OrderID, err)
 			return
 		}
 		order.Status = "ERROR"
@@ -158,6 +165,10 @@ func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrd
 		_ = m.store.Order().Update(order)
 		return
 	}
+	// 查询成功清理重试计数
+	m.retryMutex.Lock()
+	delete(m.retryCount, order.OrderID)
+	m.retryMutex.Unlock()
 
 	statusStr, _ := status["status"].(string)
 

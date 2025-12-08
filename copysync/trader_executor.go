@@ -74,7 +74,7 @@ func (e *TraderExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecision
 		if decision.ProviderEvent.LeaderEquity > 0 && decision.ProviderEvent.Notional > 0 && decision.FollowerEquity > 0 {
 			rawRatio := decision.ProviderEvent.Notional / decision.ProviderEvent.LeaderEquity
 			target := rawRatio * decision.FollowerEquity * (e.Config.CopyRatio / 100.0)
-			decision.Formula = fmt.Sprintf("raw_ratio=%.6f target_notional=%.4f adjusted_notional=%.4f qty=%.8f", rawRatio, target, decision.FollowerNotional, decision.FollowerQty)
+			decision.Formula = fmt.Sprintf("raw_ratio=%.6f target_notional=%.4f adjusted_notional=%.4f qty=%.8f price=%.4f", rawRatio, target, decision.FollowerNotional, decision.FollowerQty, decision.Price)
 		}
 	}
 
@@ -141,6 +141,9 @@ func (e *TraderExecutor) close(dec *CopyDecision, side, symbol string, qty float
 	// 回写决策数量便于审计
 	if dec != nil && available < dec.FollowerQty {
 		dec.FollowerQty = available
+		if dec.Price > 0 {
+			dec.FollowerNotional = dec.FollowerQty * dec.Price
+		}
 	}
 
 	switch side {
@@ -184,16 +187,20 @@ func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string
 		if dec.ErrCode != "" {
 			o.ErrCode = dec.ErrCode
 		}
-		if dec.MinNotionalHit || dec.MaxNotionalHit {
-			// 仅在无错误时记录阈值命中，避免混用
-			if err == nil {
-				o.SkipReason = fmt.Sprintf("min_hit=%v,max_hit=%v", dec.MinNotionalHit, dec.MaxNotionalHit)
-			}
-		}
+		o.MinHit = dec.MinNotionalHit
+		o.MaxHit = dec.MaxNotionalHit
 	}
 	if order != nil {
 		if id, ok := order["orderId"]; ok {
 			o.OrderID = fmt.Sprintf("%v", id)
+			// 若之前标记为不可同步，改回可同步
+			if o.ErrCode == "unsyncable_order_id" {
+				o.ErrCode = ""
+				if o.Status == "ERROR" {
+					o.Status = "NEW"
+				}
+				o.SkipReason = ""
+			}
 		}
 		if clientId, ok := order["clientOrderId"]; ok {
 			o.ClientOrderID = fmt.Sprintf("%v", clientId)
@@ -244,6 +251,14 @@ func parsePositionSize(p map[string]interface{}) (size float64, isLong bool) {
 		case "long":
 			isLong = true
 		case "short":
+			isLong = false
+		}
+	}
+	if ps, ok := p["positionSide"].(string); ok && ps != "" && !isLong {
+		ps = strings.ToLower(ps)
+		if ps == "long" {
+			isLong = true
+		} else if ps == "short" {
 			isLong = false
 		}
 	}

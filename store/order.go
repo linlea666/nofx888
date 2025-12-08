@@ -41,6 +41,8 @@ type TraderOrder struct {
 	LeaderNotional float64 `json:"leader_notional,omitempty"`
 	CopyRatio    float64 `json:"copy_ratio,omitempty"`
 	SkipReason   string  `json:"skip_reason,omitempty"`
+	MinHit       bool    `json:"min_hit,omitempty"`
+	MaxHit       bool    `json:"max_hit,omitempty"`
 }
 
 // TraderStats 交易统计指标
@@ -114,6 +116,8 @@ func (s *OrderStore) InitTables() error {
 			copy_ratio REAL DEFAULT 0,
 			skip_reason TEXT DEFAULT '',
 			err_code TEXT DEFAULT '',
+			min_hit BOOLEAN DEFAULT 0,
+			max_hit BOOLEAN DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			filled_at DATETIME,
@@ -146,7 +150,7 @@ func (s *OrderStore) ListLatest(traderID string, n int) ([]*TraderOrder, error) 
 		SELECT trader_id, order_id, client_order_id, symbol, side, position_side,
 			action, order_type, quantity, price, avg_price, executed_qty, leverage,
 			status, fee, fee_asset, realized_pnl, entry_price,
-			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code,
+			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code, min_hit, max_hit,
 			created_at, updated_at, filled_at
 		FROM trader_orders
 		WHERE trader_id = ?
@@ -162,15 +166,18 @@ func (s *OrderStore) ListLatest(traderID string, n int) ([]*TraderOrder, error) 
 	for rows.Next() {
 		var o TraderOrder
 		var createdAt, updatedAt, filledAt sql.NullString
+		var minHit, maxHit sql.NullBool
 		if err := rows.Scan(
 			&o.TraderID, &o.OrderID, &o.ClientOrderID, &o.Symbol, &o.Side, &o.PositionSide,
 			&o.Action, &o.OrderType, &o.Quantity, &o.Price, &o.AvgPrice, &o.ExecutedQty, &o.Leverage,
 			&o.Status, &o.Fee, &o.FeeAsset, &o.RealizedPnL, &o.EntryPrice,
-			&o.TraceID, &o.ProviderType, &o.PriceSource, &o.LeaderPrice, &o.LeaderNotional, &o.CopyRatio, &o.SkipReason, &o.ErrCode,
+			&o.TraceID, &o.ProviderType, &o.PriceSource, &o.LeaderPrice, &o.LeaderNotional, &o.CopyRatio, &o.SkipReason, &o.ErrCode, &minHit, &maxHit,
 			&createdAt, &updatedAt, &filledAt,
 		); err != nil {
 			continue
 		}
+		o.MinHit = minHit.Bool
+		o.MaxHit = maxHit.Bool
 		if createdAt.Valid {
 			o.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
 		}
@@ -193,16 +200,16 @@ func (s *OrderStore) Create(order *TraderOrder) error {
 			trader_id, order_id, client_order_id, symbol, side, position_side,
 			action, order_type, quantity, price, avg_price, executed_qty,
 			leverage, status, fee, fee_asset, realized_pnl, entry_price,
-			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code,
+			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code, min_hit, max_hit,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		order.TraderID, order.OrderID, order.ClientOrderID, order.Symbol,
 		order.Side, order.PositionSide, order.Action, order.OrderType,
 		order.Quantity, order.Price, order.AvgPrice, order.ExecutedQty,
 		order.Leverage, order.Status, order.Fee, order.FeeAsset,
 		order.RealizedPnL, order.EntryPrice,
-		order.TraceID, order.ProviderType, order.PriceSource, order.LeaderPrice, order.LeaderNotional, order.CopyRatio, order.SkipReason, order.ErrCode,
+		order.TraceID, order.ProviderType, order.PriceSource, order.LeaderPrice, order.LeaderNotional, order.CopyRatio, order.SkipReason, order.ErrCode, order.MinHit, order.MaxHit,
 		now, now,
 	)
 	if err != nil {
@@ -226,12 +233,12 @@ func (s *OrderStore) Update(order *TraderOrder) error {
 		UPDATE trader_orders SET
 			avg_price = ?, executed_qty = ?, status = ?, fee = ?,
 			realized_pnl = ?, entry_price = ?, updated_at = ?, filled_at = ?,
-			trace_id = ?, provider_type = ?, price_source = ?, leader_price = ?, leader_notional = ?, copy_ratio = ?, skip_reason = ?, err_code = ?
+			trace_id = ?, provider_type = ?, price_source = ?, leader_price = ?, leader_notional = ?, copy_ratio = ?, skip_reason = ?, err_code = ?, min_hit = ?, max_hit = ?
 		WHERE trader_id = ? AND order_id = ?
 	`,
 		order.AvgPrice, order.ExecutedQty, order.Status, order.Fee,
 		order.RealizedPnL, order.EntryPrice, now, filledAt,
-		order.TraceID, order.ProviderType, order.PriceSource, order.LeaderPrice, order.LeaderNotional, order.CopyRatio, order.SkipReason, order.ErrCode,
+		order.TraceID, order.ProviderType, order.PriceSource, order.LeaderPrice, order.LeaderNotional, order.CopyRatio, order.SkipReason, order.ErrCode, order.MinHit, order.MaxHit,
 		order.TraderID, order.OrderID,
 	)
 	if err != nil {

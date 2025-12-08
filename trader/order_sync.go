@@ -21,6 +21,7 @@ type OrderSyncManager struct {
 	cacheMutex   sync.RWMutex
 	retryMutex   sync.Mutex
 	retryCount   map[string]int // order_id -> retry 次数
+	badIDs       map[string]bool // order_id -> unsyncable
 }
 
 // NewOrderSyncManager 创建订单同步管理器
@@ -35,6 +36,7 @@ func NewOrderSyncManager(st *store.Store, interval time.Duration) *OrderSyncMana
 		traderCache: make(map[string]Trader),
 		configCache: make(map[string]*store.TraderFullConfig),
 		retryCount:  make(map[string]int),
+		badIDs:      make(map[string]bool),
 	}
 }
 
@@ -136,7 +138,7 @@ func (m *OrderSyncManager) syncTraderOrders(traderID string, orders []*store.Tra
 
 	for _, order := range orders {
 		// 跳过无效/临时 order_id
-		if order.ErrCode == "unsyncable_order_id" || strings.HasPrefix(order.OrderID, "tmp-") {
+		if order.ErrCode == "unsyncable_order_id" || strings.HasPrefix(order.OrderID, "tmp-") || m.badIDs[order.OrderID] {
 			continue
 		}
 		m.syncSingleOrder(trader, order)
@@ -162,6 +164,7 @@ func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrd
 		if order.PriceSource == "" {
 			order.PriceSource = "copy"
 		}
+		m.badIDs[order.OrderID] = true
 		_ = m.store.Order().Update(order)
 		return
 	}

@@ -8,6 +8,7 @@ import (
 	"nofx/trader"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // TraderExecutor 将 CopyDecision 映射到 trader.Trader 下单/平仓接口。
@@ -78,13 +79,13 @@ func (e *TraderExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecision
 		if e.MaxLeverageHint > 0 && decision.ProviderEvent.Leverage > float64(e.MaxLeverageHint) {
 			logger.Infof("copysync: leverage %.2f exceeds local hint %d (not blocking)", decision.ProviderEvent.Leverage, e.MaxLeverageHint)
 		}
-		err := e.open(side, decision.ProviderEvent.Symbol, formattedQty, decision.ProviderEvent.Leverage)
+		err := e.open(decision, side, decision.ProviderEvent.Symbol, formattedQty, decision.ProviderEvent.Leverage)
 		if e.OnResult != nil {
 			e.OnResult(decision, err)
 		}
 		return err
 	case "reduce", "close":
-		err := e.close(side, decision.ProviderEvent.Symbol, formattedQty)
+		err := e.close(decision, side, decision.ProviderEvent.Symbol, formattedQty)
 		if e.OnResult != nil {
 			e.OnResult(decision, err)
 		}
@@ -92,32 +93,30 @@ func (e *TraderExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecision
 	default:
 		return fmt.Errorf("copysync: unknown action %s", decision.ProviderEvent.Action)
 	}
-}
-
-func (e *TraderExecutor) open(side, symbol string, qty float64, lev float64) error {
+func (e *TraderExecutor) open(dec *CopyDecision, side, symbol string, qty float64, lev float64) error {
 	switch side {
 	case "long":
 		order, err := e.Trader.OpenLong(symbol, qty, int(lev))
-		e.logOrder(symbol, side, "open_long", qty, lev, order, err)
+		e.logOrder(dec, symbol, side, "open_long", qty, lev, order, err)
 		return err
 	case "short":
 		order, err := e.Trader.OpenShort(symbol, qty, int(lev))
-		e.logOrder(symbol, side, "open_short", qty, lev, order, err)
+		e.logOrder(dec, symbol, side, "open_short", qty, lev, order, err)
 		return err
 	default:
 		return fmt.Errorf("copysync: unknown side %s", side)
 	}
 }
 
-func (e *TraderExecutor) close(side, symbol string, qty float64) error {
+func (e *TraderExecutor) close(dec *CopyDecision, side, symbol string, qty float64) error {
 	switch side {
 	case "long":
 		order, err := e.Trader.CloseLong(symbol, qty)
-		e.logOrder(symbol, side, "close_long", qty, 0, order, err)
+		e.logOrder(dec, symbol, side, "close_long", qty, 0, order, err)
 		return err
 	case "short":
 		order, err := e.Trader.CloseShort(symbol, qty)
-		e.logOrder(symbol, side, "close_short", qty, 0, order, err)
+		e.logOrder(dec, symbol, side, "close_short", qty, 0, order, err)
 		return err
 	default:
 		return fmt.Errorf("copysync: unknown side %s", side)
@@ -125,7 +124,7 @@ func (e *TraderExecutor) close(side, symbol string, qty float64) error {
 }
 
 // logOrder 写入订单日志（如果配置了 logger）。
-func (e *TraderExecutor) logOrder(symbol, side, action string, qty float64, lev float64, order map[string]interface{}, err error) {
+func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string, qty float64, lev float64, order map[string]interface{}, err error) {
 	if e.OrderLogger == nil {
 		return
 	}
@@ -139,6 +138,13 @@ func (e *TraderExecutor) logOrder(symbol, side, action string, qty float64, lev 
 		ProviderType: e.Config.ProviderType,
 		CopyRatio:    e.Config.CopyRatio,
 	}
+	if dec != nil {
+		o.TraceID = dec.ProviderEvent.TraceID
+		o.ProviderType = dec.ProviderEvent.ProviderType
+		o.LeaderPrice = dec.ProviderEvent.Price
+		o.LeaderNotional = dec.ProviderEvent.Notional
+		o.PriceSource = dec.PriceSource
+	}
 	if order != nil {
 		if id, ok := order["orderId"]; ok {
 			o.OrderID = fmt.Sprintf("%v", id)
@@ -148,6 +154,15 @@ func (e *TraderExecutor) logOrder(symbol, side, action string, qty float64, lev 
 		}
 		if price, ok := order["price"].(float64); ok {
 			o.Price = price
+		} else if avg, ok := order["avgPrice"].(float64); ok {
+			o.Price = avg
+		}
+	}
+	if o.OrderID == "" {
+		if dec != nil && dec.ProviderEvent.TraceID != "" {
+			o.OrderID = dec.ProviderEvent.TraceID
+		} else {
+			o.OrderID = fmt.Sprintf("%s-%d", symbol, time.Now().UnixNano())
 		}
 	}
 	if err != nil {
@@ -155,7 +170,7 @@ func (e *TraderExecutor) logOrder(symbol, side, action string, qty float64, lev 
 		o.SkipReason = err.Error()
 		o.ErrCode = classifyErr(err.Error())
 	}
-	e.OrderLogger(o, nil, err)
+	e.OrderLogger(o, dec, err)
 }
 
 // classifyErr 简单错误码映射。

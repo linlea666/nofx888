@@ -10,7 +10,6 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/store"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -318,19 +317,12 @@ func (at *AutoTrader) Run() error {
 
 	// 若配置了 CopySync，则启动（仅运行跟单，不走 AI 决策）
 	if at.config.CopyConfig != nil {
-        // 传入订单日志写入
+		// 传入订单日志写入
 		orderLogger := func(o *store.TraderOrder, dec *copysync.CopyDecision, execErr error) {
 			if o == nil || at.store == nil {
 				return
 			}
 			o.TraderID = at.id
-            if o.PriceSource == "" {
-                if dec != nil {
-                    o.PriceSource = dec.PriceSource
-                } else {
-                    o.PriceSource = "copy"
-                }
-            }
 			if dec != nil {
 				o.TraceID = dec.ProviderEvent.TraceID
 				o.ProviderType = dec.ProviderEvent.ProviderType
@@ -338,38 +330,44 @@ func (at *AutoTrader) Run() error {
 				o.LeaderNotional = dec.ProviderEvent.Notional
 				o.CopyRatio = at.config.CopyConfig.CopyRatio
 				o.PriceSource = dec.PriceSource
+				if o.OrderID == "" && dec.ProviderEvent.TraceID != "" {
+					o.OrderID = dec.ProviderEvent.TraceID
+				}
 			}
-            if o.Status == "" {
-                o.Status = "NEW"
-            }
+			if o.PriceSource == "" {
+				o.PriceSource = "copy"
+			}
+			if o.Status == "" {
+				o.Status = "NEW"
+			}
 			if execErr != nil {
 				o.Status = "ERROR"
 				o.SkipReason = execErr.Error()
-				o.ErrCode = execErr.Error()
+				o.ErrCode = copysync.ClassifyErr(execErr.Error())
 			}
-            // 写入订单表，避免重复
-            if err := at.store.Order().Create(o); err != nil {
-                logger.Infof("⚠️ [%s] 写订单日志失败: %v", at.name, err)
-            }
-        }
+			// 写入订单表，避免重复
+			if err := at.store.Order().Create(o); err != nil {
+				logger.Infof("⚠️ [%s] 写订单日志失败: %v", at.name, err)
+			}
+		}
 
-        service, err := copysync.NewServiceForTrader(*at.config.CopyConfig, at.trader, at.id, orderLogger)
-        // 初始化 provider 游标（从 copy_provider_params.last_seq）
-        if at.config.CopyConfig.ProviderParams != nil {
-            if lastSeqStr, ok := at.config.CopyConfig.ProviderParams["last_seq"]; ok {
-                if seq, err := strconv.ParseInt(lastSeqStr, 10, 64); err == nil {
-                    // 设置到 provider
-                    service.provider.SetCursor(seq)
-                }
-            }
-        }
+		service, err := copysync.NewServiceForTrader(*at.config.CopyConfig, at.trader, at.id, orderLogger)
 		if err != nil {
 			logger.Infof("❌ [%s] 启动跟单服务失败: %v", at.name, err)
 		} else {
+			// 基线持仓快照（存入 provider_params.baseline_snapshot）
+			if at.store != nil && at.config.CopyConfig.ProviderParams != nil {
+				if snap, err := service.Snapshot(); err == nil && snap != nil {
+					params := at.config.CopyConfig.ProviderParams
+					snapBytes, _ := json.Marshal(snap)
+					params["baseline_snapshot"] = string(snapBytes)
+					paramsJSON, _ := json.Marshal(params)
+					_ = at.store.Trader().UpdateCopyParams(at.userID, at.id, string(paramsJSON))
+				}
+			}
+
 			at.copyService = service
 			// 决策日志回调：写入 copy_logs
-			// 将执行器结果回调写入 decision_records
-			// 注意：decision.Decisions（actions）仍使用旧结构，这里只写决策层
 			at.copyService.WithLogger(func(dec *copysync.CopyDecision) {
 				if at.store == nil {
 					return
@@ -377,26 +375,27 @@ func (at *AutoTrader) Run() error {
 				ce := dec.ProviderEvent
 				decJSON, _ := json.Marshal(dec)
 				rec := &store.DecisionRecord{
-					TraderID:        at.id,
-					CycleNumber:     0, // 跟单模式可置 0
-					Timestamp:       time.Now(),
-					DecisionJSON:    string(decJSON), // 保存跟单决策详情
-					Success:         !dec.Skipped,
-					ErrorMessage:    dec.SkipReason,
-					TraceID:         ce.TraceID,
-					ProviderType:    ce.ProviderType,
-					LeaderEquity:    ce.LeaderEquity,
-					LeaderNotional:  ce.Notional,
-					LeaderPrice:     ce.Price,
-					PriceSource:     dec.PriceSource,
-					FollowerEquity:  dec.FollowerEquity,
+					TraderID:         at.id,
+					CycleNumber:      0, // 跟单模式可置 0
+					Timestamp:        time.Now(),
+					DecisionJSON:     string(decJSON), // 保存跟单决策详情
+					Success:          !dec.Skipped,
+					ErrorMessage:     dec.SkipReason,
+					ErrCode:          dec.CopySkipReason,
+					TraceID:          ce.TraceID,
+					ProviderType:     ce.ProviderType,
+					LeaderEquity:     ce.LeaderEquity,
+					LeaderNotional:   ce.Notional,
+					LeaderPrice:      ce.Price,
+					PriceSource:      dec.PriceSource,
+					FollowerEquity:   dec.FollowerEquity,
 					FollowerNotional: dec.FollowerNotional,
-					FollowerQty:     dec.FollowerQty,
-					CopyRatio:       at.config.CopyConfig.CopyRatio,
-					Formula:         dec.Formula,
-					MinHit:          dec.MinNotionalHit,
-					MaxHit:          dec.MaxNotionalHit,
-					CopySkipReason:  dec.SkipReason,
+					FollowerQty:      dec.FollowerQty,
+					CopyRatio:        at.config.CopyConfig.CopyRatio,
+					Formula:          dec.Formula,
+					MinHit:           dec.MinNotionalHit,
+					MaxHit:           dec.MaxNotionalHit,
+					CopySkipReason:   dec.SkipReason,
 				}
 				if err := at.store.Decision().LogDecision(rec); err != nil {
 					logger.Infof("⚠️ [%s] 写入跟单决策日志失败: %v", at.name, err)

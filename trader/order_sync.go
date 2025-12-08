@@ -143,6 +143,14 @@ func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrd
 		if time.Since(order.CreatedAt) > 5*time.Minute {
 			logger.Infof("⚠️  订单查询超时，假设已成交 (ID: %s)", order.OrderID)
 			m.markOrderFilled(order, 0, 0, 0)
+		} else {
+			order.Status = "ERROR"
+			order.SkipReason = fmt.Sprintf("query_failed: %v", err)
+			order.ErrCode = "status_query_failed"
+			if order.PriceSource == "" {
+				order.PriceSource = "copy"
+			}
+			_ = m.store.Order().Update(order)
 		}
 		return
 	}
@@ -164,6 +172,10 @@ func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrd
 
 	case "CANCELED", "EXPIRED":
 		order.Status = statusStr
+		order.ErrCode = "exchange_reject"
+		if order.PriceSource == "" {
+			order.PriceSource = "copy"
+		}
 		if err := m.store.Order().Update(order); err != nil {
 			logger.Infof("⚠️  更新订单状态失败: %v", err)
 		} else {
@@ -180,6 +192,9 @@ func (m *OrderSyncManager) markOrderFilled(order *store.TraderOrder, avgPrice, e
 	}
 	if executedQty == 0 {
 		executedQty = order.Quantity
+	}
+	if order.PriceSource == "" {
+		order.PriceSource = "copy"
 	}
 
 	// 计算已实现盈亏（仅平仓订单）

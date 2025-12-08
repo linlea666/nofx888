@@ -167,6 +167,7 @@ func (s *Server) setupRoutes() {
 			protected.GET("/decisions", s.handleDecisions)
 			protected.GET("/decisions/latest", s.handleLatestDecisions)
 			protected.GET("/statistics", s.handleStatistics)
+			protected.GET("/orders", s.handleOrders)
 		}
 	}
 }
@@ -1538,6 +1539,7 @@ func (s *Server) handleGetTraderConfig(c *gin.Context) {
 			"leverage_sync":          traderConfig.CopyLeverageSync,
 			"margin_mode_sync":       traderConfig.CopyMarginSync,
 			"price_fallback_enabled": traderConfig.CopyPriceFallback,
+			"provider_params_raw":    traderConfig.CopyProviderParams,
 		},
 	}
 
@@ -1700,6 +1702,31 @@ func (s *Server) handleStatistics(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, stats)
+}
+
+// handleOrders 返回订单列表（最近50条，含扩展字段）
+func (s *Server) handleOrders(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	trader, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	orders, err := trader.GetStore().Order().ListLatest(trader.GetID(), 50)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("获取订单失败: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, orders)
 }
 
 // handleCompetition 竞赛总览（对比所有trader）

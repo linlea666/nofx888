@@ -165,6 +165,40 @@ export function DecisionCard({ decision, language }: DecisionCardProps) {
         </div>
       )}
 
+      {/* 跟单扩展展示 */}
+      {(decision.provider_type || decision.trace_id || decision.formula) && (
+        <div className="mt-3 rounded border border-[#2B3139] bg-[#0B0E11] p-3 text-xs text-[#EAECEF] space-y-1">
+          <div className="font-semibold text-sm">跟单详情</div>
+          {decision.provider_type && (
+            <div>来源: {decision.provider_type} {decision.trace_id ? `(trace: ${decision.trace_id})` : ''}</div>
+          )}
+          {decision.price_source && (
+            <div>价格来源: {decision.price_source}</div>
+          )}
+          {(decision.leader_notional || decision.leader_equity) && (
+            <div>
+              领航员成交额/净值: {decision.leader_notional ?? '--'} / {decision.leader_equity ?? '--'}
+            </div>
+          )}
+          {(decision.follower_notional || decision.copy_ratio) && (
+            <div>
+              跟单成交额: {decision.follower_notional ?? '--'} (系数 {decision.copy_ratio ?? '--'}%)
+            </div>
+          )}
+          {decision.formula && <div>公式: {decision.formula}</div>}
+          {(decision.min_hit || decision.max_hit) && (
+            <div>
+              阈值命中: {decision.min_hit ? 'min' : ''} {decision.max_hit ? 'max' : ''}
+            </div>
+          )}
+          {(decision.copy_skip_reason || decision.err_code || decision.error_message) && (
+            <div className="text-[#F87171]">
+              跳过/错误: {decision.copy_skip_reason || decision.err_code || decision.error_message}
+            </div>
+          )}
+        </div>
+      )}
+
       {decision.error_message && (
         <div
           className="rounded p-3 mt-3 text-sm"

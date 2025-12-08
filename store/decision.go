@@ -46,6 +46,7 @@ type DecisionRecord struct {
 	MinHit          bool    `json:"min_hit,omitempty"`
 	MaxHit          bool    `json:"max_hit,omitempty"`
 	CopySkipReason  string  `json:"copy_skip_reason,omitempty"`
+	ErrCode         string  `json:"err_code,omitempty"`
 }
 
 // AccountSnapshot 账户状态快照
@@ -129,6 +130,7 @@ func (s *DecisionStore) initTables() error {
 			min_hit BOOLEAN DEFAULT 0,
 			max_hit BOOLEAN DEFAULT 0,
 			copy_skip_reason TEXT DEFAULT '',
+			err_code TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		// 索引
@@ -164,7 +166,7 @@ func (s *DecisionStore) LogDecision(record *DecisionRecord) error {
 			cot_trace, decision_json, candidate_coins, execution_log,
 			success, error_message, ai_request_duration_ms,
 			trace_id, provider_type, leader_equity, leader_notional, leader_price, price_source,
-			follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason
+       follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason, err_code
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.TraderID, record.CycleNumber, record.Timestamp.Format(time.RFC3339),
@@ -172,7 +174,7 @@ func (s *DecisionStore) LogDecision(record *DecisionRecord) error {
 		string(candidateCoinsJSON), string(executionLogJSON),
 		record.Success, record.ErrorMessage, record.AIRequestDurationMs,
 		record.TraceID, record.ProviderType, record.LeaderEquity, record.LeaderNotional, record.LeaderPrice, record.PriceSource,
-		record.FollowerEquity, record.FollowerNotional, record.FollowerQty, record.CopyRatio, record.Formula, record.MinHit, record.MaxHit, record.CopySkipReason,
+		record.FollowerEquity, record.FollowerNotional, record.FollowerQty, record.CopyRatio, record.Formula, record.MinHit, record.MaxHit, record.CopySkipReason, record.ErrCode,
 	)
 	if err != nil {
 		return fmt.Errorf("插入决策记录失败: %w", err)
@@ -194,7 +196,7 @@ func (s *DecisionStore) GetLatestRecords(traderID string, n int) ([]*DecisionRec
 		       cot_trace, decision_json, candidate_coins, execution_log,
 		       success, error_message, ai_request_duration_ms,
 		       trace_id, provider_type, leader_equity, leader_notional, leader_price, price_source,
-		       follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason
+       follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason, err_code
 		FROM decision_records
 		WHERE trader_id = ?
 		ORDER BY timestamp DESC
@@ -234,7 +236,7 @@ func (s *DecisionStore) GetAllLatestRecords(n int) ([]*DecisionRecord, error) {
 		       cot_trace, decision_json, candidate_coins, execution_log,
 		       success, error_message, ai_request_duration_ms,
 		       trace_id, provider_type, leader_equity, leader_notional, leader_price, price_source,
-		       follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason
+		       follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason, err_code
 		FROM decision_records
 		ORDER BY timestamp DESC
 		LIMIT ?
@@ -270,7 +272,7 @@ func (s *DecisionStore) GetRecordsByDate(traderID string, date time.Time) ([]*De
 			   cot_trace, decision_json, candidate_coins, execution_log,
 			   success, error_message, ai_request_duration_ms,
 			   trace_id, provider_type, leader_equity, leader_notional, leader_price, price_source,
-			   follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason
+			   follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason, err_code
 		FROM decision_records
 		WHERE trader_id = ? AND DATE(timestamp) = ?
 		ORDER BY timestamp ASC
@@ -394,10 +396,11 @@ func (s *DecisionStore) scanDecisionRecord(rows *sql.Rows) (*DecisionRecord, err
 		leaderEquity, leaderNotional, leaderPrice                   sql.NullFloat64
 		followerEquity, followerNotional, followerQty, copyRatio    sql.NullFloat64
 		minHit, maxHit                                               sql.NullBool
+		errCode                                                      sql.NullString
 	)
 	scanTargets = append(scanTargets,
 		&traceID, &providerType, &leaderEquity, &leaderNotional, &leaderPrice, &priceSource,
-		&followerEquity, &followerNotional, &followerQty, &copyRatio, &formula, &minHit, &maxHit, &copySkipReason,
+		&followerEquity, &followerNotional, &followerQty, &copyRatio, &formula, &minHit, &maxHit, &copySkipReason, &errCode,
 	)
 
 	if err := rows.Scan(scanTargets...); err != nil {
@@ -418,6 +421,7 @@ func (s *DecisionStore) scanDecisionRecord(rows *sql.Rows) (*DecisionRecord, err
 	record.MinHit = minHit.Bool
 	record.MaxHit = maxHit.Bool
 	record.CopySkipReason = copySkipReason.String
+	record.ErrCode = errCode.String
 
 	record.Timestamp, _ = time.Parse(time.RFC3339, timestampStr)
 	json.Unmarshal([]byte(candidateCoinsJSON), &record.CandidateCoins)

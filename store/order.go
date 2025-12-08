@@ -140,6 +140,51 @@ func (s *OrderStore) InitTables() error {
 	return nil
 }
 
+// ListLatest 返回最近 n 条订单（按时间倒序）
+func (s *OrderStore) ListLatest(traderID string, n int) ([]*TraderOrder, error) {
+	rows, err := s.db.Query(`
+		SELECT trader_id, order_id, client_order_id, symbol, side, position_side,
+			action, order_type, quantity, price, avg_price, executed_qty, leverage,
+			status, fee, fee_asset, realized_pnl, entry_price,
+			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code,
+			created_at, updated_at, filled_at
+		FROM trader_orders
+		WHERE trader_id = ?
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, traderID, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*TraderOrder
+	for rows.Next() {
+		var o TraderOrder
+		var createdAt, updatedAt, filledAt sql.NullString
+		if err := rows.Scan(
+			&o.TraderID, &o.OrderID, &o.ClientOrderID, &o.Symbol, &o.Side, &o.PositionSide,
+			&o.Action, &o.OrderType, &o.Quantity, &o.Price, &o.AvgPrice, &o.ExecutedQty, &o.Leverage,
+			&o.Status, &o.Fee, &o.FeeAsset, &o.RealizedPnL, &o.EntryPrice,
+			&o.TraceID, &o.ProviderType, &o.PriceSource, &o.LeaderPrice, &o.LeaderNotional, &o.CopyRatio, &o.SkipReason, &o.ErrCode,
+			&createdAt, &updatedAt, &filledAt,
+		); err != nil {
+			continue
+		}
+		if createdAt.Valid {
+			o.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
+		}
+		if updatedAt.Valid {
+			o.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt.String)
+		}
+		if filledAt.Valid {
+			o.FilledAt, _ = time.Parse(time.RFC3339, filledAt.String)
+		}
+		result = append(result, &o)
+	}
+	return result, nil
+}
+
 // Create 创建订单记录
 func (s *OrderStore) Create(order *TraderOrder) error {
 	now := time.Now().Format(time.RFC3339)
@@ -180,11 +225,13 @@ func (s *OrderStore) Update(order *TraderOrder) error {
 	_, err := s.db.Exec(`
 		UPDATE trader_orders SET
 			avg_price = ?, executed_qty = ?, status = ?, fee = ?,
-			realized_pnl = ?, entry_price = ?, updated_at = ?, filled_at = ?
+			realized_pnl = ?, entry_price = ?, updated_at = ?, filled_at = ?,
+			trace_id = ?, provider_type = ?, price_source = ?, leader_price = ?, leader_notional = ?, copy_ratio = ?, skip_reason = ?, err_code = ?
 		WHERE trader_id = ? AND order_id = ?
 	`,
 		order.AvgPrice, order.ExecutedQty, order.Status, order.Fee,
 		order.RealizedPnL, order.EntryPrice, now, filledAt,
+		order.TraceID, order.ProviderType, order.PriceSource, order.LeaderPrice, order.LeaderNotional, order.CopyRatio, order.SkipReason, order.ErrCode,
 		order.TraderID, order.OrderID,
 	)
 	if err != nil {
@@ -464,6 +511,7 @@ func (s *OrderStore) GetPendingOrders(traderID string) ([]*TraderOrder, error) {
 		SELECT id, trader_id, order_id, client_order_id, symbol, side, position_side,
 			action, order_type, quantity, price, avg_price, executed_qty,
 			leverage, status, fee, fee_asset, realized_pnl, entry_price,
+			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code,
 			created_at, updated_at, filled_at
 		FROM trader_orders
 		WHERE trader_id = ? AND status = 'NEW'
@@ -483,6 +531,7 @@ func (s *OrderStore) GetAllPendingOrders() ([]*TraderOrder, error) {
 		SELECT id, trader_id, order_id, client_order_id, symbol, side, position_side,
 			action, order_type, quantity, price, avg_price, executed_qty,
 			leverage, status, fee, fee_asset, realized_pnl, entry_price,
+			trace_id, provider_type, price_source, leader_price, leader_notional, copy_ratio, skip_reason, err_code,
 			created_at, updated_at, filled_at
 		FROM trader_orders
 		WHERE status = 'NEW'
@@ -509,6 +558,7 @@ func (s *OrderStore) scanOrders(rows *sql.Rows) ([]*TraderOrder, error) {
 			&order.OrderType, &order.Quantity, &order.Price, &order.AvgPrice,
 			&order.ExecutedQty, &order.Leverage, &order.Status, &order.Fee,
 			&order.FeeAsset, &order.RealizedPnL, &order.EntryPrice,
+			&order.TraceID, &order.ProviderType, &order.PriceSource, &order.LeaderPrice, &order.LeaderNotional, &order.CopyRatio, &order.SkipReason, &order.ErrCode,
 			&createdAt, &updatedAt, &filledAt,
 		)
 		if err != nil {

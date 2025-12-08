@@ -74,6 +74,54 @@ export interface DecisionRecord {
   execution_log: string[]
   success: boolean
   error_message?: string
+  // 跟单扩展（可选）
+  trace_id?: string
+  provider_type?: string
+  leader_equity?: number
+  leader_notional?: number
+  leader_price?: number
+  price_source?: string
+  follower_equity?: number
+  follower_notional?: number
+  follower_qty?: number
+  copy_ratio?: number
+  formula?: string
+  min_hit?: boolean
+  max_hit?: boolean
+  copy_skip_reason?: string
+  err_code?: string
+}
+
+export interface TraderOrder {
+  trader_id: string
+  order_id: string
+  client_order_id?: string
+  symbol: string
+  side: string
+  position_side?: string
+  action: string
+  order_type?: string
+  quantity: number
+  price?: number
+  avg_price?: number
+  executed_qty?: number
+  leverage?: number
+  status: string
+  fee?: number
+  fee_asset?: string
+  realized_pnl?: number
+  entry_price?: number
+  trace_id?: string
+  provider_type?: string
+  price_source?: string
+  leader_price?: number
+  leader_notional?: number
+  copy_ratio?: number
+  skip_reason?: string
+  err_code?: string
+  created_at?: string
+  updated_at?: string
+  filled_at?: string
 }
 
 export interface Statistics {

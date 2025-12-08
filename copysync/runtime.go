@@ -1,14 +1,17 @@
 package copysync
 
 import (
+	"encoding/json"
 	"fmt"
 	"nofx/market"
+	"nofx/store"
 	"nofx/trader"
+	"strconv"
 )
 
 // NewServiceForTrader 根据 CopyConfig 与 provider 选择创建 CopySync Service。
 // followerTrader：跟随账户的交易适配器；用于取净值与下单。
-func NewServiceForTrader(cfg CopyConfig, followerTrader trader.Trader, traderID string, orderLogger func(o *store.TraderOrder)) (*Service, error) {
+func NewServiceForTrader(cfg CopyConfig, followerTrader trader.Trader, traderID string, orderLogger func(o *store.TraderOrder, dec *CopyDecision, execErr error)) (*Service, error) {
 	cfg.EnsureDefaults()
 
 	// 创建 provider
@@ -46,12 +49,12 @@ func NewServiceForTrader(cfg CopyConfig, followerTrader trader.Trader, traderID 
 		EnableLeverageSync: cfg.LeverageSync,
 		EnableMarginSync:   cfg.MarginModeSync,
 	}
-	exec.OrderLogger = func(o *store.TraderOrder) {
+	exec.OrderLogger = func(o *store.TraderOrder, dec *CopyDecision, execErr error) {
 		if orderLogger == nil || o == nil {
 			return
 		}
 		o.TraderID = traderID
-		orderLogger(o)
+		orderLogger(o, dec, execErr)
 	}
 
 	// 行情兜底价
@@ -64,5 +67,30 @@ func NewServiceForTrader(cfg CopyConfig, followerTrader trader.Trader, traderID 
 	}
 
 	service := NewService(cfg, provider, account, exec, priceFunc)
+	// 读取持久化游标
+	if cfg.ProviderParams != nil {
+		if lastSeqStr, ok := cfg.ProviderParams["last_seq"]; ok {
+			if seq, err := strconv.ParseInt(lastSeqStr, 10, 64); err == nil {
+				provider.SetCursor(seq)
+			}
+		}
+	}
+	// 从 provider_params 读取 baseline_snapshot 作为基线
+	if cfg.ProviderParams != nil {
+		if snapStr, ok := cfg.ProviderParams["baseline_snapshot"]; ok && snapStr != "" {
+			var snap LeaderState
+			if err := json.Unmarshal([]byte(snapStr), &snap); err == nil {
+				service.SetBaseline(&snap)
+			}
+		}
+	}
 	return service, nil
+}
+
+// Snapshot 获取当前领航员快照（用于持久化基线）
+func (s *Service) Snapshot() (*LeaderState, error) {
+	if s.provider == nil {
+		return nil, fmt.Errorf("provider nil")
+	}
+	return s.provider.Snapshot(s.ctx)
 }

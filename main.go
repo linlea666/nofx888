@@ -11,9 +11,11 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/store"
+	"nofx/trader"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -93,6 +95,11 @@ func main() {
 	if err := backtestManager.RestoreRuns(); err != nil {
 		logger.Warnf("⚠️ 恢复历史回测失败: %v", err)
 	}
+
+	// 启动订单状态同步（统一更新 NEW -> FILLED/ERROR）
+	orderSync := trader.NewOrderSyncManager(st, 15*time.Second)
+	orderSync.Start()
+	defer orderSync.Stop()
 
 	// 从数据库加载所有交易员到内存
 	if err := traderManager.LoadTradersFromStore(st); err != nil {

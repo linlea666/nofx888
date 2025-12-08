@@ -21,22 +21,23 @@ type Provider interface {
 
 // ProviderEvent 领航员单条交易事件（成交/仓位变动）。
 type ProviderEvent struct {
- TraceID      string    `json:"trace_id"`
- SourceID     string    `json:"source_id"`
- Symbol       string    `json:"symbol"`
- Side         string    `json:"side"`         // buy/sell 或 long/short
- Action       string    `json:"action"`       // open/add/reduce/close
- Price        float64   `json:"price"`        // 事件价格（成交价）；缺价时由价源兜底
- PriceSource  string    `json:"price_source"` // fill / market
- Size         float64   `json:"size"`         // 合约张数或币数量（与 exchange 具体单位一致）
- Notional     float64   `json:"notional"`     // 成交额（quote 计价），优先使用
- Leverage     float64   `json:"leverage"`     // 领航员杠杆
- MarginMode   string    `json:"margin_mode"`  // cross / isolated
- MarginUsed   float64   `json:"margin_used"`  // 该笔或该仓保证金（若可得）
- LeaderEquity float64   `json:"leader_equity"`// 领航员净值，用于比例换算
- ProviderType string    `json:"provider_type"`// provider 类型，便于日志
- Timestamp    time.Time `json:"timestamp"`
- Seq          int64     `json:"seq"` // 序号/游标，便于幂等和断点续传
+	TraceID      string    `json:"trace_id"`
+	SourceID     string    `json:"source_id"`
+	Symbol       string    `json:"symbol"`
+	Side         string    `json:"side"`         // buy/sell 或 long/short
+	Action       string    `json:"action"`       // open/add/reduce/close
+	Price        float64   `json:"price"`        // 事件价格（成交价）；缺价时由价源兜底
+	PriceSource  string    `json:"price_source"` // fill / market
+	Size         float64   `json:"size"`         // 合约张数或币数量（与 exchange 具体单位一致）
+	Notional     float64   `json:"notional"`     // 成交额（quote 计价），优先使用
+	Leverage     float64   `json:"leverage"`     // 领航员杠杆
+	MarginMode   string    `json:"margin_mode"`  // cross / isolated
+	MarginUsed   float64   `json:"margin_used"`  // 该笔或该仓保证金（若可得）
+	LeaderEquity float64   `json:"leader_equity"`// 领航员净值，用于比例换算
+	ProviderType string    `json:"provider_type"`// provider 类型，便于日志
+	ErrCode      string    `json:"err_code"`     // 额外错误（如缺价）
+	Timestamp    time.Time `json:"timestamp"`
+	Seq          int64     `json:"seq"` // 序号/游标，便于幂等和断点续传
 }
 
 // LeaderState 描述领航员当前账户与持仓的概要信息。

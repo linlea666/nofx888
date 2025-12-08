@@ -6,7 +6,7 @@ import (
 	"math"
 	"nofx/logger"
 	"sync"
-	"time"
+	"strings"
 )
 
 // FollowerAccount 获取跟随账户净值。
@@ -31,6 +31,7 @@ type CopyDecision struct {
 	MaxNotionalHit  bool        `json:"max_notional_hit"`
 	Skipped         bool        `json:"skipped"`
 	SkipReason      string      `json:"skip_reason"`
+	CopySkipReason  string      `json:"copy_skip_reason"`
 	// 公式展示辅助
 	Formula string `json:"formula"`
 }
@@ -47,6 +48,7 @@ type Service struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	baseline *LeaderState
 }
 
 // NewService 创建 CopySync 服务。
@@ -64,6 +66,49 @@ func NewService(cfg CopyConfig, provider Provider, account FollowerAccount, exec
 	}
 }
 
+// SetBaseline 设置领航员基线快照（已有仓位不跟）。
+func (s *Service) SetBaseline(state *LeaderState) {
+	s.baseline = state
+}
+
+func (s *Service) logSkip(ev ProviderEvent, reason string) {
+	if s.loggerCb == nil {
+		return
+	}
+	dec := &CopyDecision{
+		ProviderEvent: ev,
+		Skipped:       true,
+		SkipReason:    reason,
+		CopySkipReason: reason,
+	}
+	s.loggerCb(dec)
+}
+
+// classifyErr 简单错误码映射。
+func classifyErr(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	l := strings.ToLower(msg)
+	switch {
+	case strings.Contains(l, "min qty"):
+		return "min_qty_not_met"
+	case strings.Contains(l, "min notional"):
+		return "min_notional_not_met"
+	case strings.Contains(l, "insufficient"):
+		return "insufficient_balance"
+	case strings.Contains(l, "price"):
+		return "price_missing"
+	default:
+		return "exchange_reject"
+	}
+}
+
+// ClassifyErr 导出错误码分类，便于外部复用（日志/前端展示一致）。
+func ClassifyErr(msg string) string {
+	return classifyErr(msg)
+}
+
 // WithLogger 设置决策日志回调。
 func (s *Service) WithLogger(cb func(decision *CopyDecision)) {
 	s.loggerCb = cb
@@ -73,6 +118,15 @@ func (s *Service) WithLogger(cb func(decision *CopyDecision)) {
 func (s *Service) Start() error {
 	if s.provider == nil || s.account == nil || s.executor == nil {
 		return fmt.Errorf("copysync: missing provider/account/executor")
+	}
+	// 基线快照（用于过滤已有仓位）仅在可用时加载一次
+	if snap, err := s.provider.Snapshot(s.ctx); err == nil {
+		if s.baseline == nil {
+			s.baseline = snap
+		} else {
+			// 更新基线时间戳，避免使用过旧数据
+			s.baseline.Timestamp = snap.Timestamp
+		}
 	}
 	if err := s.provider.Start(s.ctx); err != nil {
 		return fmt.Errorf("start provider: %w", err)
@@ -123,16 +177,35 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		return
 	}
 
+	// 基线过滤：已有仓位不跟（直到归零后重新开仓）
+	if s.baseline != nil && s.baseline.Positions != nil {
+		keyLong := fmt.Sprintf("%s_long", ev.Symbol)
+		keyShort := fmt.Sprintf("%s_short", ev.Symbol)
+		if s.baseline.Positions[keyLong] != nil || s.baseline.Positions[keyShort] != nil {
+			// 如果是 close 动作允许通过，否则跳过
+			if ev.Action != "close" && ev.Action != "reduce" {
+				logger.Infof("copysync: skip %s %s due to baseline position", ev.Symbol, ev.Action)
+				s.logSkip(ev, "baseline_skip")
+				return
+			}
+		}
+	}
+
 	price := ev.Price
 	priceSource := ev.PriceSource
 	if price <= 0 && s.cfg.PriceFallbackEnabled && s.priceFunc != nil {
 		if p, err := s.priceFunc(ev.Symbol); err == nil && p > 0 {
 			price = p
 			priceSource = "market"
+		} else if err != nil {
+			ev.ErrCode = "price_fallback_failed"
+			s.logSkip(ev, ev.ErrCode)
+			return
 		}
 	}
 	if price <= 0 {
 		logger.Infof("copysync: skip %s %s no price available", ev.Symbol, ev.Action)
+		s.logSkip(ev, "price_missing")
 		return
 	}
 
@@ -142,6 +215,7 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	}
 	if leaderNotional <= 0 || ev.LeaderEquity <= 0 {
 		logger.Infof("copysync: skip %s %s no leader notional/equity", ev.Symbol, ev.Action)
+		s.logSkip(ev, "leader_notional_missing")
 		return
 	}
 
@@ -167,6 +241,7 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	qty := followerNotional / price
 	if qty <= 0 || math.IsNaN(qty) || math.IsInf(qty, 0) {
 		logger.Infof("copysync: skip %s %s invalid qty computed", ev.Symbol, ev.Action)
+		s.logSkip(ev, "qty_invalid")
 		return
 	}
 
@@ -185,6 +260,7 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	if err := s.executor.ExecuteCopy(s.ctx, decision); err != nil {
 		decision.Skipped = true
 		decision.SkipReason = err.Error()
+		decision.CopySkipReason = classifyErr(decision.SkipReason)
 		logger.Infof("copysync: execute %s %s failed: %v (trace=%s)", ev.Symbol, ev.Action, err, ev.TraceID)
 		if s.loggerCb != nil {
 			s.loggerCb(decision)

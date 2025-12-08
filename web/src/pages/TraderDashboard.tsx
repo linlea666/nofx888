@@ -30,6 +30,7 @@ import type {
   DecisionRecord,
   Statistics,
   TraderInfo,
+  TraderOrder,
 } from '../types'
 
 // 获取友好的AI模型名称
@@ -192,8 +193,67 @@ export default function TraderDashboard() {
     }
   )
 
+  const { data: orders } = useSWR<TraderOrder[]>(
+    user && token && selectedTraderId ? `orders-${selectedTraderId}` : null,
+    () => api.getOrders(selectedTraderId!),
+    {
+      refreshInterval: 20000,
+      revalidateOnFocus: false,
+      dedupingInterval: 15000,
+    }
+  )
   // Avoid unused variable warning
   void stats
+  void orders
+
+  const renderOrders = () => {
+    if (!orders || orders.length === 0) return null
+    return (
+      <div className="bg-[#0B0E11] border border-[#2B3139] rounded-lg p-4 mt-4">
+        <div className="flex justify-between items-center mb-3">
+          <div className="text-sm font-semibold text-[#EAECEF]">最近订单</div>
+          <div className="text-xs text-[#848E9C]">仅展示最近 50 条</div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left">
+            <thead className="text-[#848E9C]">
+              <tr>
+                <th className="px-2 py-1">时间</th>
+                <th className="px-2 py-1">交易对</th>
+                <th className="px-2 py-1">方向</th>
+                <th className="px-2 py-1">动作</th>
+                <th className="px-2 py-1">数量</th>
+                <th className="px-2 py-1">价格</th>
+                <th className="px-2 py-1">状态</th>
+                <th className="px-2 py-1">价源</th>
+                <th className="px-2 py-1">错误码</th>
+              </tr>
+            </thead>
+            <tbody className="text-[#EAECEF]">
+              {orders.map((o) => (
+                <tr key={`${o.order_id}-${o.created_at || Math.random()}`} className="border-t border-[#2B3139]">
+                  <td className="px-2 py-1 whitespace-nowrap">{o.created_at ? new Date(o.created_at).toLocaleString() : '-'}</td>
+                  <td className="px-2 py-1">{o.symbol}</td>
+                  <td className="px-2 py-1">{o.side}</td>
+                  <td className="px-2 py-1">{o.action}</td>
+                  <td className="px-2 py-1">{o.quantity}</td>
+                  <td className="px-2 py-1">{o.price ?? '-'}</td>
+                  <td className="px-2 py-1">{o.status}</td>
+                  <td className="px-2 py-1">{o.price_source || '-'}</td>
+                  <td className="px-2 py-1">{o.err_code || o.skip_reason || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Recent Orders */}
+        <div className="binance-card p-6 animate-slide-in" style={{ animationDelay: '0.3s' }}>
+          {renderOrders()}
+        </div>
+      </div>
+    )
+  }
 
   useEffect(() => {
     if (account) {
@@ -1076,3 +1136,12 @@ function DecisionCard({
     </div>
   )
 }
+  const { data: orders } = useSWR<TraderOrder[]>(
+    user && token && selectedTraderId ? `orders-${selectedTraderId}` : null,
+    () => api.getOrders(selectedTraderId!),
+    {
+      refreshInterval: 20000,
+      revalidateOnFocus: false,
+      dedupingInterval: 15000,
+    }
+  )

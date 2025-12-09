@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"sync"
 	"time"
 )
+
+const hyperliquidInfoURL = "https://api.hyperliquid.xyz/info"
 
 // HyperliquidProvider 通过公开 info 接口轮询 userFills + clearinghouseState。
 type HyperliquidProvider struct {
@@ -76,17 +79,9 @@ func (p *HyperliquidProvider) Snapshot(ctx context.Context) (*LeaderState, error
 			MarginMode: mapHLLeverageType(ap.Position.Leverage.Type),
 		}
 	}
-                       key := fmt.Sprintf("%s_%s", ap.Position.Coin, side)
-                       positions[key] = &LeaderPosition{
-                               Symbol:     ap.Position.Coin,
-                               Side:       side,
-                               Size:       abs(parseFloat(ap.Position.Szi, 0)),
-                               EntryPrice: parseFloat(ap.Position.EntryPx, 0),
-                               MarginUsed: parseFloat(ap.Position.MarginUsed, 0),
-                                Leverage:   ap.Position.Leverage.Value,
-                               MarginMode: mapHLLeverageType(ap.Position.Leverage.Type),
-                       }
-               }
+	p.leaderEquityMu.Lock()
+	p.leaderEquity = parseFloat(state.MarginSummary.AccountValue, 0)
+	p.leaderEquityMu.Unlock()
 	return &LeaderState{
 		Equity:    parseFloat(state.MarginSummary.AccountValue, 0),
 		Positions: positions,
@@ -150,10 +145,12 @@ func (p *HyperliquidProvider) pullFillsOnce(ctx context.Context) error {
 	payload := map[string]interface{}{
 		"type": "userFills",
 		"user": p.address,
+		// 将多笔部分成交合并，减少冗余事件
+		"aggregateByTime": true,
 	}
 	reqBody, _ := json.Marshal(payload)
 
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.hyperliquid.xyz/info", bytes.NewReader(reqBody))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, hyperliquidInfoURL, bytes.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.httpClient.Do(req)
@@ -161,6 +158,10 @@ func (p *HyperliquidProvider) pullFillsOnce(ctx context.Context) error {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("userFills unexpected status: %s", resp.Status)
+	}
 
 	var fills []hlUserFill
 	if err := json.NewDecoder(resp.Body).Decode(&fills); err != nil {
@@ -227,7 +228,7 @@ func (p *HyperliquidProvider) fetchClearinghouse(ctx context.Context) (*hlCleari
 		"user": p.address,
 	}
 	reqBody, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.hyperliquid.xyz/info", bytes.NewReader(reqBody))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, hyperliquidInfoURL, bytes.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.httpClient.Do(req)
@@ -236,9 +237,16 @@ func (p *HyperliquidProvider) fetchClearinghouse(ctx context.Context) (*hlCleari
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("clearinghouseState unexpected status: %s", resp.Status)
+	}
+
 	var state hlClearinghouseResp
 	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
 		return nil, err
+	}
+	if state.MarginSummary.AccountValue == "" && len(state.AssetPositions) == 0 {
+		return nil, errors.New("clearinghouseState returned empty body")
 	}
 	return &state, nil
 }
@@ -361,8 +369,6 @@ func deriveHLAction(prev, next float64) string {
 	}
 	// 方向翻转：视为平掉原仓后按新方向重新开仓，由上层先平反向再开同向
 	return "open"
-	// 方向翻转，一笔视为平仓后重新开仓
-	return "close"
 }
 
 func sameDirection(a, b float64) bool {

@@ -312,6 +312,7 @@ func (t *OKXTrader) GetPositions() ([]map[string]interface{}, error) {
 		Lever   string `json:"lever"`
 		LiqPx   string `json:"liqPx"`
 		Margin  string `json:"margin"`
+		MgnMode string `json:"mgnMode"`
 	}
 
 	if err := json.Unmarshal(data, &positions); err != nil {
@@ -330,6 +331,7 @@ func (t *OKXTrader) GetPositions() ([]map[string]interface{}, error) {
 		upl, _ := strconv.ParseFloat(pos.Upl, 64)
 		leverage, _ := strconv.ParseFloat(pos.Lever, 64)
 		liqPrice, _ := strconv.ParseFloat(pos.LiqPx, 64)
+		margin, _ := strconv.ParseFloat(pos.Margin, 64)
 
 		// 转换symbol格式
 		symbol := t.convertSymbolBack(pos.InstId)
@@ -353,6 +355,9 @@ func (t *OKXTrader) GetPositions() ([]map[string]interface{}, error) {
 			"leverage":         leverage,
 			"liquidationPrice": liqPrice,
 			"side":             side,
+			"positionSide":     side,
+			"margin":           margin,
+			"marginMode":       pos.MgnMode,
 		}
 		result = append(result, posMap)
 	}

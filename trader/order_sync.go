@@ -4,25 +4,25 @@ import (
 	"fmt"
 	"nofx/logger"
 	"nofx/store"
+	"strings"
 	"sync"
 	"time"
-	"strings"
 )
 
 // OrderSyncManager 订单状态同步管理器
 // 负责定期扫描所有 NEW 状态的订单，并更新其状态
 type OrderSyncManager struct {
-	store        *store.Store
-	interval     time.Duration
-	stopCh       chan struct{}
-	wg           sync.WaitGroup
-	traderCache  map[string]Trader // trader_id -> Trader 实例缓存
-	configCache  map[string]*store.TraderFullConfig // trader_id -> 配置缓存
-	cacheMutex   sync.RWMutex
-	retryMutex   sync.Mutex
-	retryCount   map[string]int // order_id -> retry 次数
-	badIDs       map[string]bool // order_id -> unsyncable
-	errMap       map[string]string // order_id -> last err_code
+	store       *store.Store
+	interval    time.Duration
+	stopCh      chan struct{}
+	wg          sync.WaitGroup
+	traderCache map[string]Trader                  // trader_id -> Trader 实例缓存
+	configCache map[string]*store.TraderFullConfig // trader_id -> 配置缓存
+	cacheMutex  sync.RWMutex
+	retryMutex  sync.Mutex
+	retryCount  map[string]int    // order_id -> retry 次数
+	badIDs      map[string]bool   // order_id -> unsyncable
+	errMap      map[string]string // order_id -> last err_code
 }
 
 // NewOrderSyncManager 创建订单同步管理器
@@ -139,14 +139,18 @@ func (m *OrderSyncManager) syncTraderOrders(traderID string, orders []*store.Tra
 	}
 
 	for _, order := range orders {
-		// 跳过无效/临时 order_id
+		// 跳过无效/临时 order_id；若可通过 client_order_id/trace 恢复，则先尝试恢复真实 ID。
 		if order.ErrCode == "unsyncable_order_id" || strings.HasPrefix(order.OrderID, "tmp-") || m.badIDs[order.OrderID] {
-			if order.SkipReason == "" {
-				order.SkipReason = "unsyncable_order_id"
+			if m.tryRecoverOrderID(trader, order) {
+				// 已恢复真实 ID，继续常规查询
+			} else {
+				if order.SkipReason == "" {
+					order.SkipReason = "unsyncable_order_id"
+				}
+				order.Syncable = false
+				logger.Infof("⚠️  跳过不可同步订单 ID=%s trace=%s", order.OrderID, order.TraceID)
+				continue
 			}
-			order.Syncable = false
-			logger.Infof("⚠️  跳过不可同步订单 ID=%s trace=%s", order.OrderID, order.TraceID)
-			continue
 		}
 		// 填充 syncable/last_err 方便前端
 		order.Syncable = !(order.ErrCode == "unsyncable_order_id" || strings.HasPrefix(order.OrderID, "tmp-") || m.badIDs[order.OrderID])
@@ -167,13 +171,14 @@ func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrd
 		cnt := m.retryCount[order.OrderID] + 1
 		m.retryCount[order.OrderID] = cnt
 		m.retryMutex.Unlock()
+		order.RetryCount = cnt
 		// 退避：前 3 次直接跳过，不降级；超过则标 ERROR
 		if cnt <= 3 {
 			logger.Infof("⚠️  查询订单失败，重试(%d/3) ID=%s err=%v", cnt, order.OrderID, err)
 			return
 		}
 		order.Status = "ERROR"
-		order.SkipReason = fmt.Sprintf("query_failed after %d retries: %v", cnt, err)
+		order.SkipReason = fmt.Sprintf("status_query_failed retries=%d err=%v", cnt, err)
 		order.ErrCode = "status_query_failed"
 		if order.PriceSource == "" {
 			order.PriceSource = "copy"
@@ -188,6 +193,7 @@ func (m *OrderSyncManager) syncSingleOrder(trader Trader, order *store.TraderOrd
 	delete(m.retryCount, order.OrderID)
 	delete(m.errMap, order.OrderID)
 	m.retryMutex.Unlock()
+	order.RetryCount = 0
 
 	statusStr, _ := status["status"].(string)
 
@@ -261,6 +267,64 @@ func (m *OrderSyncManager) markOrderFilled(order *store.TraderOrder, avgPrice, e
 				order.OrderID, avgPrice, executedQty)
 		}
 	}
+}
+
+// tryRecoverOrderID 尝试用 client_order_id/trace 重新查询订单状态并回写真实 order_id。
+func (m *OrderSyncManager) tryRecoverOrderID(trader Trader, order *store.TraderOrder) bool {
+	candidates := []string{}
+	if order.ClientOrderID != "" {
+		candidates = append(candidates, order.ClientOrderID)
+	}
+	if order.OrderID != "" {
+		candidates = append(candidates, order.OrderID)
+	}
+	for _, id := range candidates {
+		if id == "" {
+			continue
+		}
+		status, err := trader.GetOrderStatus(order.Symbol, id)
+		if err != nil || status == nil {
+			continue
+		}
+		if realID := firstString(status, "orderId", "orderID", "ordId", "ordID"); realID != "" && !strings.HasPrefix(realID, "tmp-") {
+			order.OrderID = realID
+			order.ErrCode = ""
+			order.SkipReason = ""
+			order.Status = "NEW"
+			order.Syncable = true
+			if err := m.store.Order().Upsert(order); err != nil {
+				logger.Infof("⚠️  回写真实 order_id 失败 id=%s trace=%s err=%v", realID, order.TraceID, err)
+			}
+			m.retryMutex.Lock()
+			delete(m.retryCount, id)
+			m.retryMutex.Unlock()
+			delete(m.badIDs, id)
+			return true
+		}
+	}
+	return false
+}
+
+func firstString(m map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			switch t := v.(type) {
+			case string:
+				if t != "" {
+					return t
+				}
+			case fmt.Stringer:
+				if s := t.String(); s != "" {
+					return s
+				}
+			default:
+				if s := fmt.Sprintf("%v", t); s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // getOrCreateTrader 获取或创建 trader 实例

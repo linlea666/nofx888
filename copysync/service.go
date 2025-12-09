@@ -449,6 +449,7 @@ func (s *Service) handleFollowerPositions(ev ProviderEvent) bool {
 		size float64
 	}{}
 	hasSame := false
+	sameSize := 0.0
 	for _, p := range positions {
 		ps, size, isLong, err := parsePosition(p)
 		if err != nil {
@@ -460,6 +461,7 @@ func (s *Service) handleFollowerPositions(ev ProviderEvent) bool {
 		}
 		if (ev.Side == "long" && isLong) || (ev.Side == "short" && !isLong) {
 			hasSame = true
+			sameSize += size
 		} else {
 			side := "short"
 			if isLong {
@@ -481,7 +483,24 @@ func (s *Service) handleFollowerPositions(ev ProviderEvent) bool {
 		}
 	}
 
+	// 同向仓位存在时，根据基线判断是否残留；若基线无持仓则先对账平掉后继续本次事件。
 	if hasSame {
+		baseSize := 0.0
+		if s.baseline != nil && s.baseline.Positions != nil {
+			key := fmt.Sprintf("%s_%s", ev.Symbol, ev.Side)
+			if bp := s.baseline.Positions[key]; bp != nil {
+				baseSize = bp.Size
+			}
+		}
+		if baseSize <= 0 {
+			logger.Warnf("copysync: trim residual same-side position before %s %s size=%.4f", ev.Symbol, ev.Action, sameSize)
+			if err := te.close(nil, ev.Side, ev.Symbol, sameSize); err != nil {
+				s.logSkip(ev, "residual_position_not_cleared")
+				return true
+			}
+			return false
+		}
+
 		logger.Infof("copysync: follower has same-side position for %s, continue %s", ev.Symbol, ev.Action)
 		if ev.Action == "open" {
 			s.logSkip(ev, "same_side_exists")

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"nofx/logger"
+	"strings"
 	"sync"
 	"time"
 )
@@ -264,6 +265,22 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		return
 	}
 
+	formulaParts := []string{
+		fmt.Sprintf("按比例换算：领航员成交额 %.4f / 净值 %.4f = 原始比例 %.6f", leaderNotional, ev.LeaderEquity, rawRatio),
+		fmt.Sprintf("跟随净值 %.4f × 跟单系数 %.2f%% => 目标成交额 %.4f", followerEquity, s.cfg.CopyRatio, followerNotional),
+		fmt.Sprintf("价源 %s=%.4f => 下单数量 %.8f", priceSource, price, qty),
+	}
+	if minHit || maxHit {
+		hits := []string{}
+		if minHit {
+			hits = append(hits, "命中最小成交额")
+		}
+		if maxHit {
+			hits = append(hits, "命中最大成交额")
+		}
+		formulaParts = append(formulaParts, fmt.Sprintf("阈值：%s", strings.Join(hits, "，")))
+	}
+
 	decision := &CopyDecision{
 		ProviderEvent:    ev,
 		FollowerEquity:   followerEquity,
@@ -273,7 +290,7 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		PriceSource:      priceSource,
 		MinNotionalHit:   minHit,
 		MaxNotionalHit:   maxHit,
-		Formula:          fmt.Sprintf("follow_notional=max(min, (%.4f/%.4f)*%.4f*%.2f%%)=%.4f qty=%.8f", leaderNotional, ev.LeaderEquity, followerEquity, s.cfg.CopyRatio, followerNotional, qty),
+		Formula:          strings.Join(formulaParts, " | "),
 	}
 
 	if err := s.executor.ExecuteCopy(s.ctx, decision); err != nil {
@@ -286,8 +303,7 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		}
 		return
 	}
-	logger.Infof("copysync: execute %s %s ok qty=%.8f notional=%.4f price=%.4f source=%s minHit=%v maxHit=%v provider=%s trace=%s",
-		ev.Symbol, ev.Action, qty, followerNotional, price, priceSource, minHit, maxHit, ev.ProviderType, ev.TraceID)
+	logger.Infof("copysync: %s %s 跟单完成 | %s | provider=%s trace=%s", ev.Symbol, ev.Action, decision.Formula, ev.ProviderType, ev.TraceID)
 	if s.loggerCb != nil {
 		s.loggerCb(decision)
 	}

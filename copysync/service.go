@@ -1,14 +1,12 @@
 package copysync
 
 import (
-	"context"
-	"fmt"
-	"math"
-	"nofx/logger"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
+        "context"
+        "fmt"
+        "math"
+        "nofx/logger"
+        "sync"
+        "time"
 )
 
 // FollowerAccount 获取跟随账户净值。

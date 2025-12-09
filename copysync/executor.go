@@ -1,9 +1,8 @@
 package copysync
 
 import (
-	"context"
-	"fmt"
-	"nofx/trader"
+        "context"
+        "fmt"
 )
 
 // CallbackExecutor 允许外部注入执行逻辑，便于逐步接线交易所适配器。
@@ -18,9 +17,9 @@ func (e *CallbackExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecisi
 	return e.Callback(ctx, decision)
 }
 
-// TraderEquityAccount 使用 trader.Trader 的 GetBalance 估算净值（USDT）。
+// TraderEquityAccount 使用交易接口的 GetBalance 估算净值（USDT）。
 type TraderEquityAccount struct {
-	Trader trader.Trader
+        Trader TraderAdapter
 }
 
 func (a *TraderEquityAccount) GetEquity(ctx context.Context) (float64, error) {

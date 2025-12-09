@@ -64,17 +64,17 @@ func (p *HyperliquidProvider) Snapshot(ctx context.Context) (*LeaderState, error
 		if parseFloat(ap.Position.Szi, 0) < 0 {
 			side = "short"
 		}
-		key := fmt.Sprintf("%s_%s", ap.Position.Coin, side)
-		positions[key] = &LeaderPosition{
-			Symbol:     ap.Position.Coin,
-			Side:       side,
-			Size:       abs(parseFloat(ap.Position.Szi, 0)),
-			EntryPrice: parseFloat(ap.Position.EntryPx, 0),
-			MarginUsed: parseFloat(ap.Position.MarginUsed, 0),
-			Leverage:   parseFloat(ap.Position.Leverage.Value, 0),
-			MarginMode: mapHLLeverageType(ap.Position.Leverage.Type),
-		}
-	}
+                       key := fmt.Sprintf("%s_%s", ap.Position.Coin, side)
+                       positions[key] = &LeaderPosition{
+                               Symbol:     ap.Position.Coin,
+                               Side:       side,
+                               Size:       abs(parseFloat(ap.Position.Szi, 0)),
+                               EntryPrice: parseFloat(ap.Position.EntryPx, 0),
+                               MarginUsed: parseFloat(ap.Position.MarginUsed, 0),
+                                Leverage:   ap.Position.Leverage.Value,
+                               MarginMode: mapHLLeverageType(ap.Position.Leverage.Type),
+                       }
+               }
 	return &LeaderState{
 		Equity:    parseFloat(state.MarginSummary.AccountValue, 0),
 		Positions: positions,

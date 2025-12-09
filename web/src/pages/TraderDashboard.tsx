@@ -680,12 +680,66 @@ export default function TraderDashboard() {
                 <div className="text-lg font-semibold mb-2">
                   {t('noPositions', language)}
                 </div>
-                <div className="text-sm">
-                  {t('noActivePositions', language)}
-                </div>
-              </div>
-            )}
+            <div className="text-sm">
+              {t('noActivePositions', language)}
+            </div>
           </div>
+        )}
+      </div>
+
+      {/* Recent Orders */}
+      {orders && (
+        <div className="binance-card p-6 animate-slide-in" style={{ animationDelay: '0.18s' }}>
+          <div className="flex justify-between items-center mb-3">
+            <div className="text-sm font-semibold text-[#EAECEF]">最近订单</div>
+            <div className="text-xs text-[#848E9C]">仅展示最近 50 条</div>
+          </div>
+          {orders.length === 0 ? (
+            <div className="text-sm text-[#848E9C]">暂无订单</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="text-[#848E9C]">
+                  <tr>
+                    <th className="px-2 py-1">时间</th>
+                    <th className="px-2 py-1">交易对</th>
+                    <th className="px-2 py-1">方向</th>
+                    <th className="px-2 py-1">动作</th>
+                    <th className="px-2 py-1">数量</th>
+                    <th className="px-2 py-1">价格</th>
+                    <th className="px-2 py-1">命中最小</th>
+                    <th className="px-2 py-1">命中最大</th>
+                    <th className="px-2 py-1">状态</th>
+                    <th className="px-2 py-1">重试</th>
+                    <th className="px-2 py-1">价源</th>
+                    <th className="px-2 py-1">错误码</th>
+                    <th className="px-2 py-1">可同步</th>
+                  </tr>
+                </thead>
+                <tbody className="text-[#EAECEF]">
+                  {orders.map((o) => (
+                    <tr key={`${o.order_id}-${o.created_at || Math.random()}`} className="border-t border-[#2B3139]">
+                      <td className="px-2 py-1 whitespace-nowrap">{o.created_at ? new Date(o.created_at).toLocaleString() : '-'}</td>
+                      <td className="px-2 py-1">{o.symbol}</td>
+                      <td className="px-2 py-1">{o.side}</td>
+                      <td className="px-2 py-1">{o.action}</td>
+                      <td className="px-2 py-1">{o.quantity}</td>
+                      <td className="px-2 py-1">{o.price ?? '-'}</td>
+                      <td className="px-2 py-1">{o.min_hit ? '是' : ''}</td>
+                      <td className="px-2 py-1">{o.max_hit ? '是' : ''}</td>
+                      <td className="px-2 py-1">{o.status}</td>
+                      <td className="px-2 py-1">{o.retry_count ?? 0}</td>
+                      <td className="px-2 py-1">{o.price_source || '-'}</td>
+                      <td className="px-2 py-1">{o.err_code || '-'}</td>
+                      <td className="px-2 py-1">{o.syncable === false ? '否' : '是'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
         </div>
 
         {/* 右侧：Recent Decisions */}

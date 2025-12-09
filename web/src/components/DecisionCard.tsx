@@ -234,14 +234,16 @@ export function DecisionCard({ decision, language }: DecisionCardProps) {
             <div>阈值：最小 {decision.min_hit ? '已命中' : '未命中'}，最大 {decision.max_hit ? '已命中' : '未命中'}</div>
             <div>
               结果：{decision.success ? '下单成功/已记录' : '跳过或失败'}
-              {decision.copy_skip_reason && `（${decision.copy_skip_reason}）`}
+              {(decision.copy_skip_reason || decision.skip_reason) && `（${decision.copy_skip_reason || decision.skip_reason}）`}
             </div>
             {(decision.err_code || decision.error_message) && (
               <div className="text-[#F87171]">
                 错误码：{decision.err_code || '-'} {decision.error_message ? `（${decision.error_message}）` : ''}
               </div>
             )}
-            {decision.skip_reason && <div className="text-[#F87171]">描述：{decision.skip_reason}</div>}
+            {(decision.skip_reason || decision.copy_skip_reason) && (
+              <div className="text-[#F87171]">描述：{decision.skip_reason || decision.copy_skip_reason}</div>
+            )}
             {decision.err_code === 'unsyncable_order_id' && (
               <div className="text-[#FBBF24]">提示：此订单无交易所ID，不参与状态同步</div>
             )}

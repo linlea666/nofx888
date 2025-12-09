@@ -68,10 +68,32 @@ export function TraderConfigModal({
       price_fallback_enabled: true,
     },
   })
-  const [isSaving, setIsSaving] = useState(false)
-  const [strategies, setStrategies] = useState<Strategy[]>([])
-  const [isFetchingBalance, setIsFetchingBalance] = useState(false)
-  const [balanceFetchError, setBalanceFetchError] = useState<string>('')
+const [isSaving, setIsSaving] = useState(false)
+const [strategies, setStrategies] = useState<Strategy[]>([])
+const [isFetchingBalance, setIsFetchingBalance] = useState(false)
+const [balanceFetchError, setBalanceFetchError] = useState<string>('')
+
+  const ensureCopyConfig = (cfg?: CopyTradingConfig): CopyTradingConfig => ({
+    provider_type: cfg?.provider_type ?? '',
+    provider_params: cfg?.provider_params ?? {},
+    copy_ratio: cfg?.copy_ratio ?? 100,
+    min_notional: cfg?.min_notional ?? 0,
+    max_notional: cfg?.max_notional ?? 0,
+    follow_open: cfg?.follow_open ?? true,
+    follow_add: cfg?.follow_add ?? true,
+    follow_reduce: cfg?.follow_reduce ?? true,
+    follow_close: cfg?.follow_close ?? true,
+    leverage_sync: cfg?.leverage_sync ?? true,
+    margin_mode_sync: cfg?.margin_mode_sync ?? true,
+    price_fallback_enabled: cfg?.price_fallback_enabled ?? true,
+  })
+
+  const updateCopyConfig = (patch: Partial<CopyTradingConfig>) => {
+    setFormData(prev => ({
+      ...prev,
+      copy_config: { ...ensureCopyConfig(prev.copy_config), ...patch },
+    }))
+  }
 
   // 获取用户的策略列表
   useEffect(() => {
@@ -110,7 +132,7 @@ export function TraderConfigModal({
         is_cross_margin: traderData.is_cross_margin,
         scan_interval_minutes: traderData.scan_interval_minutes,
         initial_balance: traderData.initial_balance,
-        copy_config: traderData.copy_config || formData.copy_config,
+        copy_config: ensureCopyConfig(traderData.copy_config || formData.copy_config),
       })
     } else if (!isEditMode) {
       setFormData({
@@ -120,7 +142,7 @@ export function TraderConfigModal({
         strategy_id: '',
         is_cross_margin: true,
         scan_interval_minutes: 3,
-        copy_config: formData.copy_config,
+        copy_config: ensureCopyConfig(formData.copy_config),
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -168,6 +190,13 @@ export function TraderConfigModal({
 
     setIsSaving(true)
     try {
+      const normalizedCopyCfg = formData.copy_config ? ensureCopyConfig(formData.copy_config) : undefined
+      if (normalizedCopyCfg && !normalizedCopyCfg.provider_type) {
+        toast.error('请选择跟单 Provider 类型或关闭跟单')
+        setIsSaving(false)
+        return
+      }
+
       const saveData: CreateTraderRequest = {
         name: formData.trader_name,
         ai_model_id: formData.ai_model,
@@ -175,7 +204,7 @@ export function TraderConfigModal({
         strategy_id: formData.strategy_id || undefined,
         is_cross_margin: formData.is_cross_margin,
         scan_interval_minutes: formData.scan_interval_minutes,
-        copy_config: formData.copy_config,
+        copy_config: normalizedCopyCfg?.provider_type ? normalizedCopyCfg : undefined,
       }
 
       // 只在编辑模式时包含initial_balance
@@ -198,7 +227,7 @@ export function TraderConfigModal({
 
   const selectedStrategy = strategies.find(s => s.id === formData.strategy_id)
 
-  const copyCfg = formData.copy_config
+  const copyCfg = ensureCopyConfig(formData.copy_config)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm p-4 overflow-y-auto">
@@ -246,22 +275,17 @@ export function TraderConfigModal({
             </h3>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-sm text-[#EAECEF] block mb-2">
-                  Provider 类型
-                </label>
-                <select
-                  value={copyCfg?.provider_type || ''}
-                  onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: { ...(prev.copy_config || {}), provider_type: e.target.value }
-                    }))
-                  }
-                  className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
-                >
-                  <option value="">关闭（AI模式）</option>
-                  <option value="okx_wallet">OKX 钱包</option>
-                  <option value="hl_wallet">Hyperliquid 钱包</option>
+              <label className="text-sm text-[#EAECEF] block mb-2">
+                Provider 类型
+              </label>
+              <select
+                value={copyCfg?.provider_type || ''}
+                onChange={(e) => updateCopyConfig({ provider_type: e.target.value })}
+                className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
+              >
+                <option value="">关闭（AI模式）</option>
+                <option value="okx_wallet">OKX 钱包</option>
+                <option value="hl_wallet">Hyperliquid 钱包</option>
                 </select>
               </div>
               <div>
@@ -276,17 +300,13 @@ export function TraderConfigModal({
                     ''
                   }
                   onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: {
-                        ...(prev.copy_config || {}),
-                        provider_params: {
-                          ...(typeof prev.copy_config?.provider_params === 'object' ? prev.copy_config?.provider_params : {}),
-                          uniqueName: e.target.value,
-                          address: e.target.value,
-                        },
+                    updateCopyConfig({
+                      provider_params: {
+                        ...(typeof copyCfg?.provider_params === 'object' ? copyCfg?.provider_params : {}),
+                        uniqueName: e.target.value,
+                        address: e.target.value,
                       },
-                    }))
+                    })
                   }
                   placeholder="OKX uniqueName 或 HL address"
                   className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
@@ -302,12 +322,7 @@ export function TraderConfigModal({
                 <input
                   type="number"
                   value={copyCfg?.copy_ratio ?? 100}
-                  onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: { ...(prev.copy_config || {}), copy_ratio: Number(e.target.value) },
-                    }))
-                  }
+                  onChange={(e) => updateCopyConfig({ copy_ratio: Number(e.target.value) })}
                   className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
                 />
               </div>
@@ -318,12 +333,7 @@ export function TraderConfigModal({
                 <input
                   type="number"
                   value={copyCfg?.min_notional ?? 0}
-                  onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: { ...(prev.copy_config || {}), min_notional: Number(e.target.value) },
-                    }))
-                  }
+                  onChange={(e) => updateCopyConfig({ min_notional: Number(e.target.value) })}
                   className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
                 />
               </div>
@@ -334,12 +344,7 @@ export function TraderConfigModal({
                 <input
                   type="number"
                   value={copyCfg?.max_notional ?? 0}
-                  onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: { ...(prev.copy_config || {}), max_notional: Number(e.target.value) },
-                    }))
-                  }
+                  onChange={(e) => updateCopyConfig({ max_notional: Number(e.target.value) })}
                   className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
                 />
               </div>
@@ -350,12 +355,7 @@ export function TraderConfigModal({
                 <input
                   type="checkbox"
                   checked={copyCfg?.follow_open ?? true}
-                  onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: { ...(prev.copy_config || {}), follow_open: e.target.checked },
-                    }))
-                  }
+                  onChange={(e) => updateCopyConfig({ follow_open: e.target.checked })}
                 />
                 跟随开仓
               </label>
@@ -363,12 +363,7 @@ export function TraderConfigModal({
                 <input
                   type="checkbox"
                   checked={copyCfg?.follow_add ?? true}
-                  onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: { ...(prev.copy_config || {}), follow_add: e.target.checked },
-                    }))
-                  }
+                  onChange={(e) => updateCopyConfig({ follow_add: e.target.checked })}
                 />
                 跟随加仓
               </label>
@@ -376,12 +371,7 @@ export function TraderConfigModal({
                 <input
                   type="checkbox"
                   checked={copyCfg?.follow_reduce ?? true}
-                  onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: { ...(prev.copy_config || {}), follow_reduce: e.target.checked },
-                    }))
-                  }
+                  onChange={(e) => updateCopyConfig({ follow_reduce: e.target.checked })}
                 />
                 跟随减仓
               </label>
@@ -389,12 +379,7 @@ export function TraderConfigModal({
                 <input
                   type="checkbox"
                   checked={copyCfg?.follow_close ?? true}
-                  onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: { ...(prev.copy_config || {}), follow_close: e.target.checked },
-                    }))
-                  }
+                  onChange={(e) => updateCopyConfig({ follow_close: e.target.checked })}
                 />
                 跟随平仓
               </label>
@@ -402,12 +387,7 @@ export function TraderConfigModal({
                 <input
                   type="checkbox"
                   checked={copyCfg?.leverage_sync ?? true}
-                  onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: { ...(prev.copy_config || {}), leverage_sync: e.target.checked },
-                    }))
-                  }
+                  onChange={(e) => updateCopyConfig({ leverage_sync: e.target.checked })}
                 />
                 同步杠杆
               </label>
@@ -415,12 +395,7 @@ export function TraderConfigModal({
                 <input
                   type="checkbox"
                   checked={copyCfg?.margin_mode_sync ?? true}
-                  onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: { ...(prev.copy_config || {}), margin_mode_sync: e.target.checked },
-                    }))
-                  }
+                  onChange={(e) => updateCopyConfig({ margin_mode_sync: e.target.checked })}
                 />
                 同步保证金模式
               </label>
@@ -428,12 +403,7 @@ export function TraderConfigModal({
                 <input
                   type="checkbox"
                   checked={copyCfg?.price_fallback_enabled ?? true}
-                  onChange={(e) =>
-                    setFormData(prev => ({
-                      ...prev,
-                      copy_config: { ...(prev.copy_config || {}), price_fallback_enabled: e.target.checked },
-                    }))
-                  }
+                  onChange={(e) => updateCopyConfig({ price_fallback_enabled: e.target.checked })}
                 />
                 缺价使用行情兜底
               </label>

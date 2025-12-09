@@ -152,7 +152,7 @@ export interface TraderInfo {
 }
 
 export interface CopyTradingConfig {
-  provider_type?: string
+  provider_type: string
   provider_params?: Record<string, string> | string
   copy_ratio?: number
   min_notional?: number

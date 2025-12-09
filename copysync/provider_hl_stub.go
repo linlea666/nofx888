@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -64,6 +65,17 @@ func (p *HyperliquidProvider) Snapshot(ctx context.Context) (*LeaderState, error
 		if parseFloat(ap.Position.Szi, 0) < 0 {
 			side = "short"
 		}
+		key := fmt.Sprintf("%s_%s", ap.Position.Coin, side)
+		positions[key] = &LeaderPosition{
+			Symbol:     ap.Position.Coin,
+			Side:       side,
+			Size:       abs(parseFloat(ap.Position.Szi, 0)),
+			EntryPrice: parseFloat(ap.Position.EntryPx, 0),
+			MarginUsed: parseFloat(ap.Position.MarginUsed, 0),
+			Leverage:   ap.Position.Leverage.Value,
+			MarginMode: mapHLLeverageType(ap.Position.Leverage.Type),
+		}
+	}
                        key := fmt.Sprintf("%s_%s", ap.Position.Coin, side)
                        positions[key] = &LeaderPosition{
                                Symbol:     ap.Position.Coin,
@@ -321,6 +333,9 @@ func (p *HyperliquidProvider) mapHLAction(symbol, side string, size float64) str
 }
 
 func deriveHLAction(prev, next float64) string {
+	prev = normalizeZero(prev)
+	next = normalizeZero(next)
+
 	if prev == 0 {
 		if next == 0 {
 			return "open"
@@ -344,12 +359,21 @@ func deriveHLAction(prev, next float64) string {
 	if next == 0 {
 		return "close"
 	}
+	// 方向翻转：视为平掉原仓后按新方向重新开仓，由上层先平反向再开同向
+	return "open"
 	// 方向翻转，一笔视为平仓后重新开仓
 	return "close"
 }
 
 func sameDirection(a, b float64) bool {
 	return (a >= 0 && b >= 0) || (a <= 0 && b <= 0)
+}
+
+func normalizeZero(v float64) float64 {
+	if math.Abs(v) < 1e-9 {
+		return 0
+	}
+	return v
 }
 
 func mapHLLeverageType(t string) string {

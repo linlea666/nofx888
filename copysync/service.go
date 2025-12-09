@@ -1,12 +1,12 @@
 package copysync
 
 import (
-        "context"
-        "fmt"
-        "math"
-        "nofx/logger"
-        "sync"
-        "time"
+	"context"
+	"fmt"
+	"math"
+	"nofx/logger"
+	"sync"
+	"time"
 )
 
 // FollowerAccount 获取跟随账户净值。
@@ -359,7 +359,11 @@ func (s *Service) followerHasPosition(symbol, side string) bool {
 		return false
 	}
 	for _, p := range positions {
-		ps, size, isLong := parsePosition(p)
+		ps, size, isLong, err := parsePosition(p)
+		if err != nil {
+			logger.Infof("copysync: ignore position parse error for hasPosition %v", err)
+			continue
+		}
 		if ps == symbol && size > 0 {
 			if (side == "long" && isLong) || (side == "short" && !isLong) {
 				return true
@@ -383,8 +387,9 @@ func (s *Service) reconcileFollowerPositions() {
 		return
 	}
 	for _, p := range positions {
-		sym, size, isLong := parsePosition(p)
-		if sym == "" || size <= 0 {
+		sym, size, isLong, err := parsePosition(p)
+		if err != nil {
+			logger.Warnf("copysync: reconcile skip invalid position: %v", err)
 			continue
 		}
 		side := "long"
@@ -429,7 +434,11 @@ func (s *Service) handleFollowerPositions(ev ProviderEvent) bool {
 	}{}
 	hasSame := false
 	for _, p := range positions {
-		ps, size, isLong := parsePosition(p)
+		ps, size, isLong, err := parsePosition(p)
+		if err != nil {
+			logger.Warnf("copysync: handleFollowerPositions skip invalid position: %v", err)
+			continue
+		}
 		if ps != ev.Symbol || size <= 0 {
 			continue
 		}
@@ -458,6 +467,10 @@ func (s *Service) handleFollowerPositions(ev ProviderEvent) bool {
 
 	if hasSame {
 		logger.Infof("copysync: follower has same-side position for %s, continue %s", ev.Symbol, ev.Action)
+		if ev.Action == "open" {
+			s.logSkip(ev, "same_side_exists")
+			return true
+		}
 	}
 
 	return false

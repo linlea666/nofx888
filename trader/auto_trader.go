@@ -10,6 +10,7 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/store"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,8 +35,8 @@ type AutoTraderConfig struct {
 	BybitSecretKey string
 
 	// OKX API配置
-	OKXAPIKey    string
-	OKXSecretKey string
+	OKXAPIKey     string
+	OKXSecretKey  string
 	OKXPassphrase string
 
 	// Hyperliquid配置
@@ -1329,6 +1330,11 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 
 	var result []map[string]interface{}
 	for _, pos := range positions {
+		raw := make(map[string]interface{})
+		for k, v := range pos {
+			raw[k] = v
+		}
+
 		symbol := pos["symbol"].(string)
 		side := pos["side"].(string)
 		entryPrice := pos["entryPrice"].(float64)
@@ -1345,8 +1351,15 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 			leverage = int(lev)
 		}
 
-		// 计算占用保证金
+		// 计算占用保证金，优先使用交易所返回的 margin 字段
 		marginUsed := (quantity * markPrice) / float64(leverage)
+		if m, ok := pos["margin"].(float64); ok && m > 0 {
+			marginUsed = m
+		} else if ms, ok := pos["margin"].(string); ok {
+			if mv, err := strconv.ParseFloat(ms, 64); err == nil && mv > 0 {
+				marginUsed = mv
+			}
+		}
 
 		// 计算盈亏百分比（基于保证金）
 		pnlPct := calculatePnLPercentage(unrealizedPnl, marginUsed)
@@ -1362,6 +1375,10 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 			"unrealized_pnl_pct": pnlPct,
 			"liquidation_price":  liquidationPrice,
 			"margin_used":        marginUsed,
+			"raw":                raw,
+			"meta": map[string]interface{}{
+				"source": "exchange",
+			},
 		})
 	}
 
@@ -1691,10 +1708,10 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 		// 更新仓位记录
 		err = at.store.Position().ClosePosition(
 			openPos.ID,
-			price,       // exitPrice
-			orderID,     // exitOrderID
+			price,   // exitPrice
+			orderID, // exitOrderID
 			realizedPnL,
-			0,           // fee (暂不计算)
+			0, // fee (暂不计算)
 			"ai_decision",
 		)
 		if err != nil {

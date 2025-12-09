@@ -585,7 +585,7 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 		return fmt.Errorf("trader ID '%s' 已存在", traderCfg.ID)
 	}
 
-	// 加载策略配置（必须有策略）
+	// 加载策略配置：AI 模式必须有策略；跟单模式允许无策略
 	var strategyConfig *store.StrategyConfig
 	if traderCfg.StrategyID != "" {
 		strategy, err := st.Strategy().Get(traderCfg.UserID, traderCfg.StrategyID)
@@ -598,7 +598,7 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 			return fmt.Errorf("交易员 %s 的策略配置解析失败: %w", traderCfg.Name, err)
 		}
 		logger.Infof("✓ 交易员 %s 加载策略配置: %s", traderCfg.Name, strategy.Name)
-	} else {
+	} else if traderCfg.CopyProviderType == "" {
 		return fmt.Errorf("交易员 %s 未配置策略", traderCfg.Name)
 	}
 
@@ -621,6 +621,30 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 		InitialBalance:  traderCfg.InitialBalance,
 		IsCrossMargin:   traderCfg.IsCrossMargin,
 		StrategyConfig:        strategyConfig,
+	}
+
+	// 跟单配置
+	if traderCfg.CopyProviderType != "" {
+		var paramsMap map[string]string
+		if traderCfg.CopyProviderParams != "" {
+			_ = json.Unmarshal([]byte(traderCfg.CopyProviderParams), &paramsMap)
+		}
+		copyCfg := &copysync.CopyConfig{
+			ProviderType:         traderCfg.CopyProviderType,
+			ProviderParams:       paramsMap,
+			CopyRatio:            traderCfg.CopyRatio,
+			MinNotional:          traderCfg.CopyMinNotional,
+			MaxNotional:          traderCfg.CopyMaxNotional,
+			FollowOpen:           traderCfg.CopyFollowOpen,
+			FollowAdd:            traderCfg.CopyFollowAdd,
+			FollowReduce:         traderCfg.CopyFollowReduce,
+			FollowClose:          traderCfg.CopyFollowClose,
+			LeverageSync:         traderCfg.CopyLeverageSync,
+			MarginModeSync:       traderCfg.CopyMarginSync,
+			PriceFallbackEnabled: traderCfg.CopyPriceFallback,
+		}
+		copyCfg.EnsureDefaults()
+		traderConfig.CopyConfig = copyCfg
 	}
 
 	// 根据交易所类型设置API密钥

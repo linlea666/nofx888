@@ -261,12 +261,15 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		logger.Infof("📊 [%s] 决策记录将存储到数据库", config.Name)
 	}
 
-	// 创建策略引擎（必须有策略配置）
-	if config.StrategyConfig == nil {
-		return nil, fmt.Errorf("[%s] 未配置策略", config.Name)
+	var strategyEngine *decision.StrategyEngine
+	// 跟单模式可以不需要策略；仅 AI 模式强制要求策略配置
+	if config.CopyConfig == nil {
+		if config.StrategyConfig == nil {
+			return nil, fmt.Errorf("[%s] 未配置策略", config.Name)
+		}
+		strategyEngine = decision.NewStrategyEngine(config.StrategyConfig)
+		logger.Infof("✓ [%s] 使用策略引擎（策略配置已加载）", config.Name)
 	}
-	strategyEngine := decision.NewStrategyEngine(config.StrategyConfig)
-	logger.Infof("✓ [%s] 使用策略引擎（策略配置已加载）", config.Name)
 
 	return &AutoTrader{
 		id:                    config.ID,

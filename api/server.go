@@ -1525,9 +1525,17 @@ func (s *Server) handleGetTraderConfig(c *gin.Context) {
 		"use_coin_pool":         traderConfig.UseCoinPool,
 		"use_oi_top":            traderConfig.UseOITop,
 		"is_running":            isRunning,
-		"copy_config": map[string]interface{}{
+	}
+
+	// 跟单配置（解析 provider_params）
+	if traderConfig.CopyProviderType != "" {
+		var params map[string]string
+		if traderConfig.CopyProviderParams != "" {
+			_ = json.Unmarshal([]byte(traderConfig.CopyProviderParams), &params)
+		}
+		result["copy_config"] = map[string]interface{}{
 			"provider_type":          traderConfig.CopyProviderType,
-			"provider_params":        traderConfig.CopyProviderParams,
+			"provider_params":        params,
 			"copy_ratio":             traderConfig.CopyRatio,
 			"min_notional":           traderConfig.CopyMinNotional,
 			"max_notional":           traderConfig.CopyMaxNotional,
@@ -1538,8 +1546,9 @@ func (s *Server) handleGetTraderConfig(c *gin.Context) {
 			"leverage_sync":          traderConfig.CopyLeverageSync,
 			"margin_mode_sync":       traderConfig.CopyMarginSync,
 			"price_fallback_enabled": traderConfig.CopyPriceFallback,
-			"provider_params_raw":    traderConfig.CopyProviderParams,
-		},
+		}
+	} else {
+		result["copy_config"] = nil
 	}
 
 	c.JSON(http.StatusOK, result)

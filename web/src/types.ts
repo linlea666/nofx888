@@ -89,6 +89,7 @@ export interface DecisionRecord {
   min_hit?: boolean
   max_hit?: boolean
   copy_skip_reason?: string
+  skip_reason?: string
   err_code?: string
 }
 
@@ -151,7 +152,7 @@ export interface TraderInfo {
 }
 
 export interface CopyTradingConfig {
-  provider_type: string
+  provider_type?: string
   provider_params?: Record<string, string> | string
   copy_ratio?: number
   min_notional?: number

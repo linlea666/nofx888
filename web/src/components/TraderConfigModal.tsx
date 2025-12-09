@@ -12,8 +12,6 @@ function getShortName(fullName: string): string {
   return parts.length > 1 ? parts[parts.length - 1] : fullName
 }
 
-import type { TraderConfigData } from '../types'
-
 // 表单内部状态类型
 interface FormState {
   trader_id?: string

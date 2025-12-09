@@ -21,6 +21,9 @@ type OKXProvider struct {
 
 	leaderEquityMu sync.Mutex
 	leaderEquity   float64 // USDT
+
+	posMu     sync.Mutex
+	positions map[string]float64 // 带符号的持仓：long 为正，short 为负
 }
 
 func NewOKXProvider(uniqueName string) *OKXProvider {
@@ -28,6 +31,7 @@ func NewOKXProvider(uniqueName string) *OKXProvider {
 		uniqueName: uniqueName,
 		events:     make(chan ProviderEvent, 200),
 		httpClient: &http.Client{Timeout: 10 * time.Second},
+		positions:  make(map[string]float64),
 	}
 }
 
@@ -50,6 +54,7 @@ func (p *OKXProvider) Events() <-chan ProviderEvent { return p.events }
 func (p *OKXProvider) Snapshot(ctx context.Context) (*LeaderState, error) {
 	equity, _ := p.fetchEquity(ctx)
 	positions, _ := p.fetchPositions(ctx)
+	p.setPositionsFromSnapshot(positions)
 	return &LeaderState{
 		Equity:    equity,
 		Positions: positions,
@@ -139,7 +144,7 @@ func (p *OKXProvider) pullOnce(ctx context.Context) error {
 			ProviderType: p.Name(),
 			Symbol:       d.InstID,
 			Side:         mapSide(d.Side, d.PosSide),
-			Action:       mapAction(d.Side, d.PosSide),
+			Action:       p.mapAction(d.Side, d.PosSide, d.InstID, parseFloat(d.Sz, 0)),
 			Price:        parseFloat(d.AvgPx, parseFloat(d.Px, 0)),
 			PriceSource:  "fill",
 			Size:         parseFloat(d.Sz, 0),
@@ -258,6 +263,23 @@ func (p *OKXProvider) setLastModify(v int64) {
 	p.lastModify = v
 }
 
+func (p *OKXProvider) setPositionsFromSnapshot(positions map[string]*LeaderPosition) {
+	p.posMu.Lock()
+	defer p.posMu.Unlock()
+
+	p.positions = make(map[string]float64)
+	for _, pos := range positions {
+		if pos == nil || pos.Size == 0 {
+			continue
+		}
+		signed := pos.Size
+		if pos.Side == "short" {
+			signed = -pos.Size
+		}
+		p.positions[pos.Symbol] = signed
+	}
+}
+
 // --- OKX response structs ---
 
 type okxTradeRecordsResp struct {
@@ -338,22 +360,36 @@ func mapSide(side, posSide string) string {
 	return side
 }
 
-func mapAction(side, posSide string) string {
+func (p *OKXProvider) mapAction(side, posSide, instID string, size float64) string {
 	ps := mapPosSide(posSide)
+	signedDelta := size
 	if ps == "long" {
-		if side == "buy" {
-			return "open"
-		}
-		return "reduce"
-	}
-	if ps == "short" {
 		if side == "sell" {
-			return "open"
+			signedDelta = -size
 		}
-		return "reduce"
+	} else if ps == "short" {
+		signedDelta = -size
+		if side == "buy" {
+			signedDelta = size
+		}
+	} else { // net/unknown，退化为方向推断：买=long，卖=short
+		if side == "sell" {
+			signedDelta = -size
+		}
 	}
-	// net 模式未知，默认 open
-	return "open"
+
+	p.posMu.Lock()
+	defer p.posMu.Unlock()
+
+	prev := p.positions[instID]
+	next := prev + signedDelta
+	action := deriveHLAction(prev, next)
+	if next == 0 {
+		delete(p.positions, instID)
+	} else {
+		p.positions[instID] = next
+	}
+	return action
 }
 
 func mapMarginMode(m string) string {

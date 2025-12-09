@@ -1398,6 +1398,11 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 		if quantity == 0 {
 			quantity = toFloat(pos["pos"])
 		}
+		symbol := pos["symbol"].(string)
+		side := pos["side"].(string)
+		entryPrice := pos["entryPrice"].(float64)
+		markPrice := pos["markPrice"].(float64)
+		quantity := pos["positionAmt"].(float64)
 		if quantity < 0 {
 			quantity = -quantity
 		}
@@ -1423,6 +1428,12 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 		}
 		if marginRaw > 0 {
 			marginUsed = marginRaw
+		if m, ok := pos["margin"].(float64); ok && m > 0 {
+			marginUsed = m
+		} else if ms, ok := pos["margin"].(string); ok {
+			if mv, err := strconv.ParseFloat(ms, 64); err == nil && mv > 0 {
+				marginUsed = mv
+			}
 		}
 
 		// 计算盈亏百分比（基于保证金）

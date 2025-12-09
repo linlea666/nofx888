@@ -15,6 +15,7 @@
 - 为 followerHasPosition/handleFollowerPositions 增加“基线对账后允许再次开仓”的节奏控制，例如记录上次领航员平仓时间戳，超过窗口后允许重新开仓，并对反向残留增加对账确认。
 - parsePosition 应在字段缺失时回传错误或在上层增加保护日志，避免 nil/类型断言失败静默导致截断失效；可针对 OKX/HL/币安的返回结构增加适配测试。
 - 订单日志建议增加独立的 min_hit/max_hit 列或结构化字段，减少 skip_reason 复用造成的歧义；持仓接口可继续增加字段级告警以覆盖更多交易所差异。
+- 订单日志建议增加独立的 min_hit/max_hit 列或结构化字段，减少 skip_reason 复用造成的歧义。
 
 ## 代码参考
 - 价格兜底重试、基线刷新与持仓对账：`copysync/service.go` 中 handleEvent、retrySnapshot、refreshBaselineLoop 和 reconcileFollowerPositions 等逻辑。 【F:copysync/service.go†L155-L347】

@@ -1,11 +1,11 @@
 package copysync
 
 import (
-        "encoding/json"
-        "fmt"
-        "nofx/market"
-        "nofx/store"
-        "strconv"
+	"encoding/json"
+	"fmt"
+	"nofx/market"
+	"nofx/store"
+	"strconv"
 )
 
 // NewServiceForTrader 根据 CopyConfig 与 provider 选择创建 CopySync Service。
@@ -56,8 +56,16 @@ func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID 
 		orderLogger(o, dec, execErr)
 	}
 
-	// 行情兜底价：先用最新成交价，再尝试 mark / mid 价
+	// 行情兜底价：优先使用跟随交易所返回的价格，其次使用通用行情（last/mid/mark）。
 	priceFunc := func(symbol string) (float64, string, error) {
+		// 1) 跟随端行情（与下单所用交易所一致）
+		if followerTrader != nil {
+			if p, err := followerTrader.GetMarketPrice(symbol); err == nil && p > 0 {
+				return p, "follower_ticker", nil
+			}
+		}
+
+		// 2) 聚合行情：先 last，再 mid
 		data, err := market.Get(symbol)
 		if err == nil && data != nil {
 			if data.CurrentPrice > 0 {
@@ -75,7 +83,7 @@ func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID 
 				}
 			}
 		}
-		// mark 价兜底
+		// 3) mark 价兜底
 		if mp, err := market.GetMarkPrice(symbol); err == nil && mp > 0 {
 			return mp, "mark", nil
 		}

@@ -10,6 +10,7 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/store"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,8 +35,8 @@ type AutoTraderConfig struct {
 	BybitSecretKey string
 
 	// OKX API配置
-	OKXAPIKey    string
-	OKXSecretKey string
+	OKXAPIKey     string
+	OKXSecretKey  string
 	OKXPassphrase string
 
 	// Hyperliquid配置
@@ -1206,6 +1207,46 @@ func (at *AutoTrader) GetStore() *store.Store {
 	return at.store
 }
 
+// toFloat 尝试将任意值转换为 float64，避免类型断言导致的崩溃。
+func toFloat(v interface{}) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case json.Number:
+		if f, err := val.Float64(); err == nil {
+			return f
+		}
+	case string:
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			return f
+		}
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	}
+	return 0
+}
+
+// pickString 尽量返回字符串字段，若类型不匹配则尝试格式化输出。
+func pickString(v interface{}) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case fmt.Stringer:
+		return val.String()
+	case float64:
+		return strconv.FormatFloat(val, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(val)
+	case int64:
+		return strconv.FormatInt(val, 10)
+	case json.Number:
+		return val.String()
+	}
+	return ""
+}
+
 // GetStatus 获取系统状态（用于API）
 func (at *AutoTrader) GetStatus() map[string]interface{} {
 	aiProvider := "DeepSeek"
@@ -1238,19 +1279,9 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 	}
 
 	// 获取账户字段
-	totalWalletBalance := 0.0
-	totalUnrealizedProfit := 0.0
-	availableBalance := 0.0
-
-	if wallet, ok := balance["totalWalletBalance"].(float64); ok {
-		totalWalletBalance = wallet
-	}
-	if unrealized, ok := balance["totalUnrealizedProfit"].(float64); ok {
-		totalUnrealizedProfit = unrealized
-	}
-	if avail, ok := balance["availableBalance"].(float64); ok {
-		availableBalance = avail
-	}
+	totalWalletBalance := toFloat(balance["totalWalletBalance"])
+	totalUnrealizedProfit := toFloat(balance["totalUnrealizedProfit"])
+	availableBalance := toFloat(balance["availableBalance"])
 
 	// Total Equity = 钱包余额 + 未实现盈亏
 	totalEquity := totalWalletBalance + totalUnrealizedProfit
@@ -1264,17 +1295,26 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 	totalMarginUsed := 0.0
 	totalUnrealizedPnLCalculated := 0.0
 	for _, pos := range positions {
-		markPrice := pos["markPrice"].(float64)
-		quantity := pos["positionAmt"].(float64)
+		markPrice := toFloat(pos["markPrice"])
+		if markPrice == 0 {
+			markPrice = toFloat(pos["markPx"])
+		}
+		quantity := toFloat(pos["positionAmt"])
+		if quantity == 0 {
+			quantity = toFloat(pos["pos"])
+		}
 		if quantity < 0 {
 			quantity = -quantity
 		}
-		unrealizedPnl := pos["unRealizedProfit"].(float64)
+		unrealizedPnl := toFloat(pos["unRealizedProfit"])
+		if unrealizedPnl == 0 {
+			unrealizedPnl = toFloat(pos["upl"])
+		}
 		totalUnrealizedPnLCalculated += unrealizedPnl
 
-		leverage := 10
-		if lev, ok := pos["leverage"].(float64); ok {
-			leverage = int(lev)
+		leverage := int(toFloat(pos["leverage"]))
+		if leverage == 0 {
+			leverage = 10
 		}
 		marginUsed := (quantity * markPrice) / float64(leverage)
 		totalMarginUsed += marginUsed
@@ -1329,24 +1369,61 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 
 	var result []map[string]interface{}
 	for _, pos := range positions {
-		symbol := pos["symbol"].(string)
-		side := pos["side"].(string)
-		entryPrice := pos["entryPrice"].(float64)
-		markPrice := pos["markPrice"].(float64)
-		quantity := pos["positionAmt"].(float64)
+		raw := make(map[string]interface{})
+		for k, v := range pos {
+			raw[k] = v
+		}
+
+		symbol := pickString(pos["symbol"])
+		if symbol == "" {
+			symbol = pickString(pos["instId"])
+		}
+		if symbol == "" {
+			logger.Warnf("GetPositions: 跳过缺少 symbol 的持仓: %+v", pos)
+			continue
+		}
+		side := pickString(pos["side"])
+		if side == "" {
+			side = pickString(pos["posSide"])
+		}
+		entryPrice := toFloat(pos["entryPrice"])
+		if entryPrice == 0 {
+			entryPrice = toFloat(pos["avgPx"])
+		}
+		markPrice := toFloat(pos["markPrice"])
+		if markPrice == 0 {
+			markPrice = toFloat(pos["markPx"])
+		}
+		quantity := toFloat(pos["positionAmt"])
+		if quantity == 0 {
+			quantity = toFloat(pos["pos"])
+		}
 		if quantity < 0 {
 			quantity = -quantity
 		}
-		unrealizedPnl := pos["unRealizedProfit"].(float64)
-		liquidationPrice := pos["liquidationPrice"].(float64)
-
-		leverage := 10
-		if lev, ok := pos["leverage"].(float64); ok {
-			leverage = int(lev)
+		unrealizedPnl := toFloat(pos["unRealizedProfit"])
+		if unrealizedPnl == 0 {
+			unrealizedPnl = toFloat(pos["upl"])
+		}
+		liquidationPrice := toFloat(pos["liquidationPrice"])
+		if liquidationPrice == 0 {
+			liquidationPrice = toFloat(pos["liqPx"])
 		}
 
-		// 计算占用保证金
+		leverage := int(toFloat(pos["leverage"]))
+		if leverage == 0 {
+			leverage = 10
+		}
+
+		// 计算占用保证金，优先使用交易所返回的 margin 字段
 		marginUsed := (quantity * markPrice) / float64(leverage)
+		marginRaw := toFloat(pos["margin"])
+		if marginRaw == 0 {
+			marginRaw = toFloat(pos["marginUsed"])
+		}
+		if marginRaw > 0 {
+			marginUsed = marginRaw
+		}
 
 		// 计算盈亏百分比（基于保证金）
 		pnlPct := calculatePnLPercentage(unrealizedPnl, marginUsed)
@@ -1362,6 +1439,10 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 			"unrealized_pnl_pct": pnlPct,
 			"liquidation_price":  liquidationPrice,
 			"margin_used":        marginUsed,
+			"raw":                raw,
+			"meta": map[string]interface{}{
+				"source": "exchange",
+			},
 		})
 	}
 
@@ -1691,10 +1772,10 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 		// 更新仓位记录
 		err = at.store.Position().ClosePosition(
 			openPos.ID,
-			price,       // exitPrice
-			orderID,     // exitOrderID
+			price,   // exitPrice
+			orderID, // exitOrderID
 			realizedPnL,
-			0,           // fee (暂不计算)
+			0, // fee (暂不计算)
 			"ai_decision",
 		)
 		if err != nil {

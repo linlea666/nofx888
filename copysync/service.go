@@ -1,12 +1,13 @@
 package copysync
 
 import (
-        "context"
-        "fmt"
-        "math"
-        "nofx/logger"
-        "sync"
-        "time"
+	"context"
+	"fmt"
+	"math"
+	"nofx/logger"
+	"strings"
+	"sync"
+	"time"
 )
 
 // FollowerAccount 获取跟随账户净值。
@@ -264,6 +265,22 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		return
 	}
 
+	formulaParts := []string{
+		fmt.Sprintf("按比例换算：领航员成交额 %.4f / 净值 %.4f = 原始比例 %.6f", leaderNotional, ev.LeaderEquity, rawRatio),
+		fmt.Sprintf("跟随净值 %.4f × 跟单系数 %.2f%% => 目标成交额 %.4f", followerEquity, s.cfg.CopyRatio, followerNotional),
+		fmt.Sprintf("价源 %s=%.4f => 下单数量 %.8f", priceSource, price, qty),
+	}
+	if minHit || maxHit {
+		hits := []string{}
+		if minHit {
+			hits = append(hits, "命中最小成交额")
+		}
+		if maxHit {
+			hits = append(hits, "命中最大成交额")
+		}
+		formulaParts = append(formulaParts, fmt.Sprintf("阈值：%s", strings.Join(hits, "，")))
+	}
+
 	decision := &CopyDecision{
 		ProviderEvent:    ev,
 		FollowerEquity:   followerEquity,
@@ -273,7 +290,7 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		PriceSource:      priceSource,
 		MinNotionalHit:   minHit,
 		MaxNotionalHit:   maxHit,
-		Formula:          fmt.Sprintf("follow_notional=max(min, (%.4f/%.4f)*%.4f*%.2f%%)=%.4f qty=%.8f", leaderNotional, ev.LeaderEquity, followerEquity, s.cfg.CopyRatio, followerNotional, qty),
+		Formula:          strings.Join(formulaParts, " | "),
 	}
 
 	if err := s.executor.ExecuteCopy(s.ctx, decision); err != nil {
@@ -286,8 +303,7 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		}
 		return
 	}
-	logger.Infof("copysync: execute %s %s ok qty=%.8f notional=%.4f price=%.4f source=%s minHit=%v maxHit=%v provider=%s trace=%s",
-		ev.Symbol, ev.Action, qty, followerNotional, price, priceSource, minHit, maxHit, ev.ProviderType, ev.TraceID)
+	logger.Infof("copysync: %s %s 跟单完成 | %s | provider=%s trace=%s", ev.Symbol, ev.Action, decision.Formula, ev.ProviderType, ev.TraceID)
 	if s.loggerCb != nil {
 		s.loggerCb(decision)
 	}
@@ -359,7 +375,11 @@ func (s *Service) followerHasPosition(symbol, side string) bool {
 		return false
 	}
 	for _, p := range positions {
-		ps, size, isLong := parsePosition(p)
+		ps, size, isLong, err := parsePosition(p)
+		if err != nil {
+			logger.Infof("copysync: ignore position parse error for hasPosition %v", err)
+			continue
+		}
 		if ps == symbol && size > 0 {
 			if (side == "long" && isLong) || (side == "short" && !isLong) {
 				return true
@@ -383,8 +403,9 @@ func (s *Service) reconcileFollowerPositions() {
 		return
 	}
 	for _, p := range positions {
-		sym, size, isLong := parsePosition(p)
-		if sym == "" || size <= 0 {
+		sym, size, isLong, err := parsePosition(p)
+		if err != nil {
+			logger.Warnf("copysync: reconcile skip invalid position: %v", err)
 			continue
 		}
 		side := "long"
@@ -428,13 +449,19 @@ func (s *Service) handleFollowerPositions(ev ProviderEvent) bool {
 		size float64
 	}{}
 	hasSame := false
+	sameSize := 0.0
 	for _, p := range positions {
-		ps, size, isLong := parsePosition(p)
+		ps, size, isLong, err := parsePosition(p)
+		if err != nil {
+			logger.Warnf("copysync: handleFollowerPositions skip invalid position: %v", err)
+			continue
+		}
 		if ps != ev.Symbol || size <= 0 {
 			continue
 		}
 		if (ev.Side == "long" && isLong) || (ev.Side == "short" && !isLong) {
 			hasSame = true
+			sameSize += size
 		} else {
 			side := "short"
 			if isLong {
@@ -456,8 +483,29 @@ func (s *Service) handleFollowerPositions(ev ProviderEvent) bool {
 		}
 	}
 
+	// 同向仓位存在时，根据基线判断是否残留；若基线无持仓则先对账平掉后继续本次事件。
 	if hasSame {
+		baseSize := 0.0
+		if s.baseline != nil && s.baseline.Positions != nil {
+			key := fmt.Sprintf("%s_%s", ev.Symbol, ev.Side)
+			if bp := s.baseline.Positions[key]; bp != nil {
+				baseSize = bp.Size
+			}
+		}
+		if baseSize <= 0 {
+			logger.Warnf("copysync: trim residual same-side position before %s %s size=%.4f", ev.Symbol, ev.Action, sameSize)
+			if err := te.close(nil, ev.Side, ev.Symbol, sameSize); err != nil {
+				s.logSkip(ev, "residual_position_not_cleared")
+				return true
+			}
+			return false
+		}
+
 		logger.Infof("copysync: follower has same-side position for %s, continue %s", ev.Symbol, ev.Action)
+		if ev.Action == "open" {
+			s.logSkip(ev, "same_side_exists")
+			return true
+		}
 	}
 
 	return false

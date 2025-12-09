@@ -1,19 +1,19 @@
 package copysync
 
 import (
-        "context"
-        "fmt"
-        "nofx/logger"
-        "nofx/store"
-        "strconv"
-        "time"
+	"context"
+	"fmt"
+	"nofx/logger"
+	"nofx/store"
+	"strconv"
+	"time"
 )
 
 // TraderExecutor 将 CopyDecision 映射到交易接口下单/平仓接口。
 // 注意：精度/最小单校验依赖交易所自身，若需前置校验可在此补充。
 type TraderExecutor struct {
-        Trader        TraderAdapter
-	Config        CopyConfig
+	Trader             TraderAdapter
+	Config             CopyConfig
 	EnableLeverageSync bool
 	EnableMarginSync   bool
 	// 可选的本地限额提示（不阻断）
@@ -26,10 +26,10 @@ type TraderExecutor struct {
 
 // ExecResult 用于记录执行结果，便于上层日志。
 type ExecResult struct {
-	Qty         float64
+	Qty          float64
 	FormattedQty float64
-	OrderID     interface{}
-	SkipReason  string
+	OrderID      interface{}
+	SkipReason   string
 }
 
 func (e *TraderExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecision) error {
@@ -122,7 +122,11 @@ func (e *TraderExecutor) close(dec *CopyDecision, side, symbol string, qty float
 			if ps != symbol {
 				continue
 			}
-	_, sizeVal, isLong := parsePosition(p)
+			_, sizeVal, isLong, err := parsePosition(p)
+			if err != nil {
+				logger.Warnf("copysync: close skip invalid position: %v", err)
+				continue
+			}
 			if sizeVal == 0 {
 				continue
 			}
@@ -239,6 +243,6 @@ func (e *TraderExecutor) logOrder(dec *CopyDecision, symbol, side, action string
 
 // parsePositionSize 保留向后兼容调用，内部复用通用解析。
 func parsePositionSize(p map[string]interface{}) (size float64, isLong bool) {
-	_, size, isLong = parsePosition(p)
+	_, size, isLong, _ = parsePosition(p)
 	return
 }

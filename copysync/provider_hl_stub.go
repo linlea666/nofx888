@@ -76,6 +76,17 @@ func (p *HyperliquidProvider) Snapshot(ctx context.Context) (*LeaderState, error
 			MarginMode: mapHLLeverageType(ap.Position.Leverage.Type),
 		}
 	}
+                       key := fmt.Sprintf("%s_%s", ap.Position.Coin, side)
+                       positions[key] = &LeaderPosition{
+                               Symbol:     ap.Position.Coin,
+                               Side:       side,
+                               Size:       abs(parseFloat(ap.Position.Szi, 0)),
+                               EntryPrice: parseFloat(ap.Position.EntryPx, 0),
+                               MarginUsed: parseFloat(ap.Position.MarginUsed, 0),
+                                Leverage:   ap.Position.Leverage.Value,
+                               MarginMode: mapHLLeverageType(ap.Position.Leverage.Type),
+                       }
+               }
 	return &LeaderState{
 		Equity:    parseFloat(state.MarginSummary.AccountValue, 0),
 		Positions: positions,
@@ -350,6 +361,8 @@ func deriveHLAction(prev, next float64) string {
 	}
 	// 方向翻转：视为平掉原仓后按新方向重新开仓，由上层先平反向再开同向
 	return "open"
+	// 方向翻转，一笔视为平仓后重新开仓
+	return "close"
 }
 
 func sameDirection(a, b float64) bool {

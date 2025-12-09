@@ -21,6 +21,9 @@ type HyperliquidProvider struct {
 
 	leaderEquityMu sync.Mutex
 	leaderEquity   float64
+
+	posMu     sync.Mutex
+	positions map[string]float64 // 带符号的持仓：long 为正，short 为负
 }
 
 func NewHyperliquidProvider(address string) *HyperliquidProvider {
@@ -30,6 +33,7 @@ func NewHyperliquidProvider(address string) *HyperliquidProvider {
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		positions: make(map[string]float64),
 	}
 }
 
@@ -53,6 +57,7 @@ func (p *HyperliquidProvider) Snapshot(ctx context.Context) (*LeaderState, error
 	if err != nil {
 		return nil, err
 	}
+	p.setPositionsFromState(state)
 	positions := make(map[string]*LeaderPosition)
 	for _, ap := range state.AssetPositions {
 		side := "long"
@@ -119,6 +124,7 @@ func (p *HyperliquidProvider) pollClearinghouse(ctx context.Context) {
 			p.leaderEquityMu.Lock()
 			p.leaderEquity = parseFloat(state.MarginSummary.AccountValue, 0)
 			p.leaderEquityMu.Unlock()
+			p.setPositionsFromState(state)
 		}
 		select {
 		case <-ctx.Done():
@@ -165,22 +171,24 @@ func (p *HyperliquidProvider) pullFillsOnce(ctx context.Context) error {
 		}
 		price := parseFloat(f.Px, 0)
 		size := parseFloat(f.Sz, 0)
+		side := mapHLSide(f.Side, f.Dir)
+		action := p.mapHLAction(f.Coin, side, size)
 		notional := price * size
 		ev := ProviderEvent{
 			TraceID:      fmt.Sprintf("hl-%d-%d", f.Oid, f.Time),
 			SourceID:     p.address,
 			ProviderType: p.Name(),
 			Symbol:       f.Coin,
-			Side:         mapHLSide(f.Side, f.Dir),
-			Action:       mapHLAction(f.Dir),
+			Side:         side,
+			Action:       action,
 			Price:        price,
 			PriceSource:  "fill",
 			Size:         size,
 			Notional:     notional,
-			Leverage:     0,             // fills 无杠杆，留空
-			MarginMode:   "",            // fills 无保证金模式
-			MarginUsed:   0,             // fills 无保证金
-			LeaderEquity: leaderEquity,  // 可能为 0，caller 可判断
+			Leverage:     0,            // fills 无杠杆，留空
+			MarginMode:   "",           // fills 无保证金模式
+			MarginUsed:   0,            // fills 无保证金
+			LeaderEquity: leaderEquity, // 可能为 0，caller 可判断
 			Timestamp:    time.UnixMilli(f.Time),
 			Seq:          f.Time,
 		}
@@ -235,27 +243,36 @@ func (p *HyperliquidProvider) setLastTime(v int64) {
 	p.lastTime = v
 }
 
+func (p *HyperliquidProvider) setPositionsFromState(state *hlClearinghouseResp) {
+	p.posMu.Lock()
+	defer p.posMu.Unlock()
+	p.positions = make(map[string]float64)
+	for _, ap := range state.AssetPositions {
+		p.positions[ap.Position.Coin] = parseFloat(ap.Position.Szi, 0)
+	}
+}
+
 // --- HL response structs ---
 
 type hlUserFill struct {
-	Coin   string `json:"coin"`
-	Px     string `json:"px"`
-	Sz     string `json:"sz"`
-	Side   string `json:"side"` // A/B
-	Dir    string `json:"dir"`  // Open Long / Close Short...
-	Time   int64  `json:"time"`
-	Oid    int64  `json:"oid"`
-	Tid    int64  `json:"tid"`
+	Coin string `json:"coin"`
+	Px   string `json:"px"`
+	Sz   string `json:"sz"`
+	Side string `json:"side"` // A/B
+	Dir  string `json:"dir"`  // Open Long / Close Short...
+	Time int64  `json:"time"`
+	Oid  int64  `json:"oid"`
+	Tid  int64  `json:"tid"`
 }
 
 type hlClearinghouseResp struct {
 	AssetPositions []struct {
 		Position struct {
-			Coin        string `json:"coin"`
-			Szi         string `json:"szi"`
-			EntryPx     string `json:"entryPx"`
-			MarginUsed  string `json:"marginUsed"`
-			Leverage    struct {
+			Coin       string `json:"coin"`
+			Szi        string `json:"szi"`
+			EntryPx    string `json:"entryPx"`
+			MarginUsed string `json:"marginUsed"`
+			Leverage   struct {
 				Value float64 `json:"value"`
 				Type  string  `json:"type"`
 			} `json:"leverage"`
@@ -283,15 +300,56 @@ func mapHLSide(side, dir string) string {
 	return side
 }
 
-func mapHLAction(dir string) string {
-	switch dir {
-	case "Open Long", "Open Short":
-		return "open"
-	case "Close Long", "Close Short":
-		return "close"
-	default:
+func (p *HyperliquidProvider) mapHLAction(symbol, side string, size float64) string {
+	signedDelta := size
+	if side == "short" {
+		signedDelta = -size
+	}
+
+	p.posMu.Lock()
+	defer p.posMu.Unlock()
+
+	prev := p.positions[symbol]
+	next := prev + signedDelta
+	action := deriveHLAction(prev, next)
+	if next == 0 {
+		delete(p.positions, symbol)
+	} else {
+		p.positions[symbol] = next
+	}
+	return action
+}
+
+func deriveHLAction(prev, next float64) string {
+	if prev == 0 {
+		if next == 0 {
+			return "open"
+		}
 		return "open"
 	}
+
+	if sameDirection(prev, next) {
+		if abs(next) > abs(prev) {
+			return "add"
+		}
+		if abs(next) < abs(prev) {
+			if next == 0 {
+				return "close"
+			}
+			return "reduce"
+		}
+		return "open"
+	}
+
+	if next == 0 {
+		return "close"
+	}
+	// 方向翻转，一笔视为平仓后重新开仓
+	return "close"
+}
+
+func sameDirection(a, b float64) bool {
+	return (a >= 0 && b >= 0) || (a <= 0 && b <= 0)
 }
 
 func mapHLLeverageType(t string) string {
@@ -303,11 +361,4 @@ func mapHLLeverageType(t string) string {
 	default:
 		return t
 	}
-}
-
-func abs(v float64) float64 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }

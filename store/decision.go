@@ -144,6 +144,28 @@ func (s *DecisionStore) initTables() error {
 		}
 	}
 
+	// 向后兼容：补齐缺失列，避免老版本表结构导致插入列数不匹配
+	alterQueries := []string{
+		`ALTER TABLE decision_records ADD COLUMN trace_id TEXT DEFAULT ''`,
+		`ALTER TABLE decision_records ADD COLUMN provider_type TEXT DEFAULT ''`,
+		`ALTER TABLE decision_records ADD COLUMN leader_equity REAL DEFAULT 0`,
+		`ALTER TABLE decision_records ADD COLUMN leader_notional REAL DEFAULT 0`,
+		`ALTER TABLE decision_records ADD COLUMN leader_price REAL DEFAULT 0`,
+		`ALTER TABLE decision_records ADD COLUMN price_source TEXT DEFAULT ''`,
+		`ALTER TABLE decision_records ADD COLUMN follower_equity REAL DEFAULT 0`,
+		`ALTER TABLE decision_records ADD COLUMN follower_notional REAL DEFAULT 0`,
+		`ALTER TABLE decision_records ADD COLUMN follower_qty REAL DEFAULT 0`,
+		`ALTER TABLE decision_records ADD COLUMN copy_ratio REAL DEFAULT 0`,
+		`ALTER TABLE decision_records ADD COLUMN formula TEXT DEFAULT ''`,
+		`ALTER TABLE decision_records ADD COLUMN min_hit BOOLEAN DEFAULT 0`,
+		`ALTER TABLE decision_records ADD COLUMN max_hit BOOLEAN DEFAULT 0`,
+		`ALTER TABLE decision_records ADD COLUMN copy_skip_reason TEXT DEFAULT ''`,
+		`ALTER TABLE decision_records ADD COLUMN err_code TEXT DEFAULT ''`,
+	}
+	for _, q := range alterQueries {
+		s.db.Exec(q)
+	}
+
 	return nil
 }
 

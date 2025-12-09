@@ -196,6 +196,12 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 			return
 		}
 	}
+	// 如果是 reduce/close 但跟随端无仓位，则跳过，避免 reduce-only 报错
+	if (ev.Action == "reduce" || ev.Action == "close") && !s.followerHasPosition(ev.Symbol, ev.Side) {
+		logger.Infof("copysync: skip %s %s follower has no position", ev.Symbol, ev.Action)
+		s.logSkip(ev, "follower_position_missing")
+		return
+	}
 
 	price := ev.Price
 	priceSource := ev.PriceSource

@@ -161,7 +161,7 @@ func (s *TraderStore) Create(trader *Trader) error {
 		                     copy_provider_type, copy_provider_params, copy_ratio, copy_min_notional, copy_max_notional,
 		                     copy_follow_open, copy_follow_add, copy_follow_reduce, copy_follow_close,
 		                     copy_leverage_sync, copy_margin_sync, copy_price_fallback)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, trader.ID, trader.UserID, trader.Name, trader.AIModelID, trader.ExchangeID, trader.StrategyID,
 		trader.InitialBalance, trader.ScanIntervalMinutes, trader.IsRunning, trader.IsCrossMargin,
 		trader.BTCETHLeverage, trader.AltcoinLeverage, trader.TradingSymbols, trader.UseCoinPool,

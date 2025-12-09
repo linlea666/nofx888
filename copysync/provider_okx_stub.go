@@ -52,8 +52,17 @@ func (p *OKXProvider) Events() <-chan ProviderEvent { return p.events }
 
 // Snapshot 使用 position-current + asset 获取当前基线。
 func (p *OKXProvider) Snapshot(ctx context.Context) (*LeaderState, error) {
-	equity, _ := p.fetchEquity(ctx)
-	positions, _ := p.fetchPositions(ctx)
+	equity, err := p.fetchEquity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	positions, err := p.fetchPositions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p.leaderEquityMu.Lock()
+	p.leaderEquity = equity
+	p.leaderEquityMu.Unlock()
 	p.setPositionsFromSnapshot(positions)
 	return &LeaderState{
 		Equity:    equity,
@@ -107,8 +116,7 @@ func (p *OKXProvider) pullOnce(ctx context.Context) error {
 		start = end - 3*60*1000 // 初次取最近3分钟
 	}
 
-	url := fmt.Sprintf("https://www.okx.com/priapi/v5/ecotrade/public/community/user/trade-records?uniqueName=%s&startModify=%d&endModify=%d&limit=80",
-		p.uniqueName, start, end)
+	url := fmt.Sprintf("%s?uniqueName=%s&startModify=%d&endModify=%d&limit=80", okxTradeRecordsURL, p.uniqueName, start, end)
 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	resp, err := p.httpClient.Do(req)
@@ -116,6 +124,10 @@ func (p *OKXProvider) pullOnce(ctx context.Context) error {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if err := ensureOKXStatus(resp); err != nil {
+		return err
+	}
 
 	var trResp okxTradeRecordsResp
 	if err := json.NewDecoder(resp.Body).Decode(&trResp); err != nil {
@@ -193,13 +205,17 @@ func (p *OKXProvider) pollAssets(ctx context.Context) {
 }
 
 func (p *OKXProvider) fetchEquity(ctx context.Context) (float64, error) {
-	url := fmt.Sprintf("https://www.okx.com/priapi/v5/ecotrade/public/community/user/asset?uniqueName=%s", p.uniqueName)
+	url := fmt.Sprintf("%s?uniqueName=%s", okxAssetURL, p.uniqueName)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
 	defer resp.Body.Close()
+
+	if err := ensureOKXStatus(resp); err != nil {
+		return 0, err
+	}
 
 	var assetResp okxAssetResp
 	if err := json.NewDecoder(resp.Body).Decode(&assetResp); err != nil {
@@ -217,13 +233,17 @@ func (p *OKXProvider) fetchEquity(ctx context.Context) (float64, error) {
 }
 
 func (p *OKXProvider) fetchPositions(ctx context.Context) (map[string]*LeaderPosition, error) {
-	url := fmt.Sprintf("https://www.okx.com/priapi/v5/ecotrade/public/community/user/position-current?uniqueName=%s", p.uniqueName)
+	url := fmt.Sprintf("%s?uniqueName=%s", okxPositionURL, p.uniqueName)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if err := ensureOKXStatus(resp); err != nil {
+		return nil, err
+	}
 
 	var posResp okxPositionResp
 	if err := json.NewDecoder(resp.Body).Decode(&posResp); err != nil {
@@ -401,4 +421,18 @@ func mapMarginMode(m string) string {
 	default:
 		return m
 	}
+}
+
+const (
+	okxBaseURL         = "https://www.okx.com/priapi/v5/ecotrade/public/community"
+	okxTradeRecordsURL = okxBaseURL + "/user/trade-records"
+	okxPositionURL     = okxBaseURL + "/user/position-current"
+	okxAssetURL        = okxBaseURL + "/user/asset"
+)
+
+func ensureOKXStatus(resp *http.Response) error {
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("okx http status %d", resp.StatusCode)
+	}
+	return nil
 }

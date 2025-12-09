@@ -1,20 +1,18 @@
 package copysync
 
 import (
-	"context"
-	"fmt"
-	"nofx/logger"
-	"nofx/store"
-	"nofx/trader"
-	"strconv"
-	"strings"
-	"time"
+        "context"
+        "fmt"
+        "nofx/logger"
+        "nofx/store"
+        "strconv"
+        "time"
 )
 
-// TraderExecutor 将 CopyDecision 映射到 trader.Trader 下单/平仓接口。
+// TraderExecutor 将 CopyDecision 映射到交易接口下单/平仓接口。
 // 注意：精度/最小单校验依赖交易所自身，若需前置校验可在此补充。
 type TraderExecutor struct {
-	Trader        trader.Trader
+        Trader        TraderAdapter
 	Config        CopyConfig
 	EnableLeverageSync bool
 	EnableMarginSync   bool

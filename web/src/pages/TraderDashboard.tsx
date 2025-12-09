@@ -222,16 +222,17 @@ export default function TraderDashboard() {
                 <th className="px-2 py-1">交易对</th>
                 <th className="px-2 py-1">方向</th>
                 <th className="px-2 py-1">动作</th>
-                <th className="px-2 py-1">数量</th>
-                <th className="px-2 py-1">价格</th>
-                <th className="px-2 py-1">命中最小</th>
-                <th className="px-2 py-1">命中最大</th>
-                <th className="px-2 py-1">状态</th>
-                <th className="px-2 py-1">价源</th>
-                <th className="px-2 py-1">错误码</th>
-                <th className="px-2 py-1">可同步</th>
-              </tr>
-            </thead>
+              <th className="px-2 py-1">数量</th>
+              <th className="px-2 py-1">价格</th>
+              <th className="px-2 py-1">命中最小</th>
+              <th className="px-2 py-1">命中最大</th>
+              <th className="px-2 py-1">状态</th>
+              <th className="px-2 py-1">重试</th>
+              <th className="px-2 py-1">价源</th>
+              <th className="px-2 py-1">错误码</th>
+              <th className="px-2 py-1">可同步</th>
+            </tr>
+          </thead>
             <tbody className="text-[#EAECEF]">
               {orders.map((o) => (
                 <tr key={`${o.order_id}-${o.created_at || Math.random()}`} className="border-t border-[#2B3139]">
@@ -239,16 +240,17 @@ export default function TraderDashboard() {
                   <td className="px-2 py-1">{o.symbol}</td>
                   <td className="px-2 py-1">{o.side}</td>
                   <td className="px-2 py-1">{o.action}</td>
-                  <td className="px-2 py-1">{o.quantity}</td>
-                  <td className="px-2 py-1">{o.price ?? '-'}</td>
-                  <td className="px-2 py-1">{o.min_hit ? '是' : ''}</td>
-                  <td className="px-2 py-1">{o.max_hit ? '是' : ''}</td>
-                  <td className="px-2 py-1">{o.status}</td>
-                  <td className="px-2 py-1">{o.price_source || '-'}</td>
-                  <td className="px-2 py-1">{o.err_code || '-'}</td>
-                  <td className="px-2 py-1">{o.syncable === false ? '否' : '是'}</td>
-                </tr>
-              ))}
+              <td className="px-2 py-1">{o.quantity}</td>
+              <td className="px-2 py-1">{o.price ?? '-'}</td>
+              <td className="px-2 py-1">{o.min_hit ? '是' : ''}</td>
+              <td className="px-2 py-1">{o.max_hit ? '是' : ''}</td>
+              <td className="px-2 py-1">{o.status}</td>
+              <td className="px-2 py-1">{o.retry_count ?? 0}</td>
+              <td className="px-2 py-1">{o.price_source || '-'}</td>
+              <td className="px-2 py-1">{o.err_code || '-'}</td>
+              <td className="px-2 py-1">{o.syncable === false ? '否' : '是'}</td>
+            </tr>
+          ))}
             </tbody>
           </table>
         </div>

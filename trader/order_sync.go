@@ -141,6 +141,11 @@ func (m *OrderSyncManager) syncTraderOrders(traderID string, orders []*store.Tra
 	for _, order := range orders {
 		// 跳过无效/临时 order_id
 		if order.ErrCode == "unsyncable_order_id" || strings.HasPrefix(order.OrderID, "tmp-") || m.badIDs[order.OrderID] {
+			if order.SkipReason == "" {
+				order.SkipReason = "unsyncable_order_id"
+			}
+			order.Syncable = false
+			logger.Infof("⚠️  跳过不可同步订单 ID=%s trace=%s", order.OrderID, order.TraceID)
 			continue
 		}
 		// 填充 syncable/last_err 方便前端

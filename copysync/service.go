@@ -166,7 +166,14 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	if s.baseline != nil && s.baseline.Positions != nil {
 		// 快照过期则忽略基线
 		if !s.baseline.Timestamp.IsZero() && time.Since(s.baseline.Timestamp) > 2*time.Hour {
-			logger.Infof("copysync: baseline expired, ignore for %s", ev.Symbol)
+			logger.Infof("copysync: baseline expired, refreshing before %s", ev.Symbol)
+			if snap, err := s.provider.Snapshot(s.ctx); err == nil {
+				s.SetBaseline(snap)
+				s.reconcileFollowerPositions()
+			} else {
+				// 基线失效，避免一直阻塞，清空
+				s.baseline = nil
+			}
 		} else {
 			keyLong := fmt.Sprintf("%s_long", ev.Symbol)
 			keyShort := fmt.Sprintf("%s_short", ev.Symbol)
@@ -184,11 +191,9 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 			}
 		}
 	}
-	// 额外防重复：若跟随端已有同向仓位且事件为开/加仓，跳过
+	// 额外防重复：若跟随端已有同向仓位且事件为开/加仓，跳过；若存在反向仓位则先尝试平掉
 	if ev.Action == "open" || ev.Action == "add" {
-		if s.followerHasPosition(ev.Symbol, ev.Side) {
-			logger.Infof("copysync: skip %s %s due to follower position exists", ev.Symbol, ev.Action)
-			s.logSkip(ev, "follower_position_exists")
+		if s.handleFollowerPositions(ev) {
 			return
 		}
 	}
@@ -197,7 +202,9 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	priceSource := ev.PriceSource
 	if price <= 0 && s.cfg.PriceFallbackEnabled && s.priceFunc != nil {
 		backoffs := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond}
+		attempts := 0
 		for i, d := range backoffs {
+			attempts++
 			if p, src, err := s.priceFunc(ev.Symbol); err == nil && p > 0 {
 				price = p
 				if src != "" {
@@ -209,8 +216,9 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 			}
 			time.Sleep(d)
 			if i == len(backoffs)-1 && price <= 0 {
-				ev.ErrCode = "price_fallback_failed"
-				s.logSkip(ev, "price_fallback_failed")
+				reason := fmt.Sprintf("price_source_down attempts=%d", attempts)
+				ev.ErrCode = "price_source_down"
+				s.logSkip(ev, reason)
 				return
 			}
 		}
@@ -404,4 +412,57 @@ func (s *Service) reconcileFollowerPositions() {
 			_ = te.close(nil, side, sym, size)
 		}
 	}
+}
+
+// handleFollowerPositions 在开/加仓前检查跟随端持仓，处理同向/反向残留。
+// 返回 true 表示已处理并需跳过本次事件。
+func (s *Service) handleFollowerPositions(ev ProviderEvent) bool {
+	te, ok := s.executor.(*TraderExecutor)
+	if !ok || te == nil || te.Trader == nil {
+		return false
+	}
+	positions, err := te.Trader.GetPositions()
+	if err != nil {
+		return false
+	}
+	opposites := []struct {
+		side string
+		size float64
+	}{}
+	hasSame := false
+	for _, p := range positions {
+		ps, size, isLong := parsePosition(p)
+		if ps != ev.Symbol || size <= 0 {
+			continue
+		}
+		if (ev.Side == "long" && isLong) || (ev.Side == "short" && !isLong) {
+			hasSame = true
+		} else {
+			side := "short"
+			if isLong {
+				side = "long"
+			}
+			opposites = append(opposites, struct {
+				side string
+				size float64
+			}{side: side, size: size})
+		}
+	}
+
+	// 先处理反向仓位：尝试强制平掉
+	for _, o := range opposites {
+		if err := te.close(nil, o.side, ev.Symbol, o.size); err != nil {
+			logger.Infof("copysync: skip %s %s due to opposite position close failed: %v", ev.Symbol, ev.Action, err)
+			s.logSkip(ev, "insufficient_position")
+			return true
+		}
+	}
+
+	// 同向仓位存在则跳过开/加仓
+	if hasSame {
+		logger.Infof("copysync: skip %s %s due to follower position exists", ev.Symbol, ev.Action)
+		s.logSkip(ev, "follower_position_exists")
+		return true
+	}
+	return false
 }

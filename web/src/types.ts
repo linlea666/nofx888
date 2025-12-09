@@ -122,6 +122,7 @@ export interface TraderOrder {
   min_hit?: boolean
   max_hit?: boolean
   syncable?: boolean
+  retry_count?: number
   created_at?: string
   updated_at?: string
   filled_at?: string

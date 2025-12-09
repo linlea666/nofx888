@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -45,6 +46,7 @@ type TraderOrder struct {
 	MinHit       bool    `json:"min_hit,omitempty"`
 	MaxHit       bool    `json:"max_hit,omitempty"`
 	Syncable     bool    `json:"syncable,omitempty"`
+	RetryCount   int     `json:"retry_count,omitempty"`
 }
 
 // TraderStats 交易统计指标
@@ -181,6 +183,7 @@ func (s *OrderStore) ListLatest(traderID string, n int) ([]*TraderOrder, error) 
 		o.MinHit = minHit.Bool
 		o.MaxHit = maxHit.Bool
 		o.Syncable = o.ErrCode != "unsyncable_order_id" && !strings.HasPrefix(o.OrderID, "tmp-")
+		o.RetryCount = parseRetryCount(o.SkipReason)
 		if createdAt.Valid {
 			o.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
 		}
@@ -193,6 +196,31 @@ func (s *OrderStore) ListLatest(traderID string, n int) ([]*TraderOrder, error) 
 		result = append(result, &o)
 	}
 	return result, nil
+}
+
+// parseRetryCount 尝试从 skip_reason 中提取重试次数（形如 "after X retries"）
+func parseRetryCount(reason string) int {
+	if reason == "" {
+		return 0
+	}
+	// 简单提取数字
+	for i := len(reason) - 1; i >= 0; i-- {
+		if reason[i] < '0' || reason[i] > '9' {
+			continue
+		}
+		// 找到最后一个数字片段
+		j := i
+		for j >= 0 && reason[j] >= '0' && reason[j] <= '9' {
+			j--
+		}
+		numStr := reason[j+1 : i+1]
+		n, err := strconv.Atoi(numStr)
+		if err == nil {
+			return n
+		}
+		break
+	}
+	return 0
 }
 
 // Create 创建订单记录
@@ -259,6 +287,50 @@ func (s *OrderStore) Upsert(order *TraderOrder) error {
 	}
 	if order.TraceID != "" {
 		if existing, err := s.GetByTraceID(order.TraderID, order.TraceID); err == nil && existing != nil {
+			// 若已获得真实 order_id，更新原记录并清除 unsyncable
+			if order.OrderID != "" && existing.OrderID != order.OrderID {
+				// 继承旧记录的关键字段，避免丢失信息
+				if order.Symbol == "" {
+					order.Symbol = existing.Symbol
+				}
+				if order.Side == "" {
+					order.Side = existing.Side
+				}
+				if order.PositionSide == "" {
+					order.PositionSide = existing.PositionSide
+				}
+				if order.Action == "" {
+					order.Action = existing.Action
+				}
+				if order.OrderType == "" {
+					order.OrderType = existing.OrderType
+				}
+				if order.Quantity == 0 {
+					order.Quantity = existing.Quantity
+				}
+				if order.Price == 0 {
+					order.Price = existing.Price
+				}
+				if order.Leverage == 0 {
+					order.Leverage = existing.Leverage
+				}
+				if order.SkipReason == "" {
+					order.SkipReason = existing.SkipReason
+				}
+				if order.CopyRatio == 0 {
+					order.CopyRatio = existing.CopyRatio
+				}
+				if order.TraceID == "" {
+					order.TraceID = existing.TraceID
+				}
+				if order.ProviderType == "" {
+					order.ProviderType = existing.ProviderType
+				}
+				if order.PriceSource == "" {
+					order.PriceSource = existing.PriceSource
+				}
+				return s.updateOrderWithNewID(existing.OrderID, order)
+			}
 			// 合并关键字段
 			if order.OrderID == "" {
 				order.OrderID = existing.OrderID
@@ -273,6 +345,37 @@ func (s *OrderStore) Upsert(order *TraderOrder) error {
 		}
 	}
 	return s.Create(order)
+}
+
+// updateOrderWithNewID 用于 unsyncable 记录补充真实 order_id。
+func (s *OrderStore) updateOrderWithNewID(oldOrderID string, order *TraderOrder) error {
+	now := time.Now().Format(time.RFC3339)
+	filledAt := ""
+	if !order.FilledAt.IsZero() {
+		filledAt = order.FilledAt.Format(time.RFC3339)
+	}
+	if order.Status == "" {
+		order.Status = "NEW"
+	}
+	if order.ErrCode == "unsyncable_order_id" {
+		order.ErrCode = ""
+	}
+	_, err := s.db.Exec(`
+		UPDATE trader_orders SET
+			order_id = ?, client_order_id = ?, symbol = ?, side = ?, position_side = ?, action = ?, order_type = ?,
+			quantity = ?, price = ?, avg_price = ?, executed_qty = ?, leverage = ?, status = ?, fee = ?, fee_asset = ?, realized_pnl = ?, entry_price = ?,
+			trace_id = ?, provider_type = ?, price_source = ?, leader_price = ?, leader_notional = ?, copy_ratio = ?, skip_reason = ?, err_code = ?, min_hit = ?, max_hit = ?,
+			updated_at = ?, filled_at = ?
+		WHERE trader_id = ? AND order_id = ?
+	`, order.OrderID, order.ClientOrderID, order.Symbol, order.Side, order.PositionSide, order.Action, order.OrderType,
+		order.Quantity, order.Price, order.AvgPrice, order.ExecutedQty, order.Leverage, order.Status, order.Fee, order.FeeAsset,
+		order.RealizedPnL, order.EntryPrice,
+		order.TraceID, order.ProviderType, order.PriceSource, order.LeaderPrice, order.LeaderNotional, order.CopyRatio, order.SkipReason, order.ErrCode, order.MinHit, order.MaxHit,
+		now, filledAt, order.TraderID, oldOrderID)
+	if err != nil {
+		return fmt.Errorf("更新订单记录失败: %w", err)
+	}
+	return nil
 }
 
 // GetByOrderID 根据订单ID获取订单
@@ -310,6 +413,7 @@ func (s *OrderStore) GetByOrderID(traderID, orderID string) (*TraderOrder, error
 		order.FilledAt, _ = time.Parse(time.RFC3339, filledAt.String)
 	}
 	order.Syncable = order.ErrCode != "unsyncable_order_id" && !strings.HasPrefix(order.OrderID, "tmp-")
+	order.RetryCount = parseRetryCount(order.SkipReason)
 
 	return &order, nil
 }
@@ -348,6 +452,8 @@ func (s *OrderStore) GetByTraceID(traderID, traceID string) (*TraderOrder, error
 	if filledAt.Valid {
 		order.FilledAt, _ = time.Parse(time.RFC3339, filledAt.String)
 	}
+	order.Syncable = order.ErrCode != "unsyncable_order_id" && !strings.HasPrefix(order.OrderID, "tmp-")
+	order.RetryCount = parseRetryCount(order.SkipReason)
 
 	return &order, nil
 }

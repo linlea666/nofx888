@@ -11,6 +11,8 @@ func ClassifyErr(msg string) string {
 	switch {
 	case strings.Contains(l, "price_fallback_failed"):
 		return "price_fallback_failed"
+	case strings.Contains(l, "price_source_down"):
+		return "price_source_down"
 	case strings.Contains(l, "price_format_zero"):
 		return "price_format_zero"
 	case strings.Contains(l, "formatted to zero"):

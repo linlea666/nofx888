@@ -1,17 +1,16 @@
 package copysync
 
 import (
-	"encoding/json"
-	"fmt"
-	"nofx/market"
-	"nofx/store"
-	"nofx/trader"
-	"strconv"
+        "encoding/json"
+        "fmt"
+        "nofx/market"
+        "nofx/store"
+        "strconv"
 )
 
 // NewServiceForTrader 根据 CopyConfig 与 provider 选择创建 CopySync Service。
 // followerTrader：跟随账户的交易适配器；用于取净值与下单。
-func NewServiceForTrader(cfg CopyConfig, followerTrader trader.Trader, traderID string, orderLogger func(o *store.TraderOrder, dec *CopyDecision, execErr error)) (*Service, error) {
+func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID string, orderLogger func(o *store.TraderOrder, dec *CopyDecision, execErr error)) (*Service, error) {
 	cfg.EnsureDefaults()
 
 	// 创建 provider

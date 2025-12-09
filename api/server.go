@@ -2,7 +2,6 @@ package api
 
 import (
     "context"
-    "encoding/base64"
     "encoding/json"
     "fmt"
     "net"

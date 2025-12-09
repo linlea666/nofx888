@@ -23,18 +23,18 @@ type ExecutionAdapter interface {
 
 // CopyDecision 已计算好的跟单指令，传递给 ExecutionAdapter。
 type CopyDecision struct {
-	ProviderEvent   ProviderEvent `json:"provider_event"`
-	FollowerEquity  float64       `json:"follower_equity"`
-	FollowerNotional float64      `json:"follower_notional"`
-	FollowerQty     float64       `json:"follower_qty"`
-	Price           float64       `json:"price"`
-	PriceSource     string        `json:"price_source"`
-	MinNotionalHit  bool          `json:"min_notional_hit"`
-	MaxNotionalHit  bool          `json:"max_notional_hit"`
-	Skipped         bool          `json:"skipped"`
-	SkipReason      string        `json:"skip_reason"`
-	CopySkipReason  string        `json:"copy_skip_reason"` // 文案
-	ErrCode         string        `json:"err_code"`         // 分类错误码
+	ProviderEvent    ProviderEvent `json:"provider_event"`
+	FollowerEquity   float64       `json:"follower_equity"`
+	FollowerNotional float64       `json:"follower_notional"`
+	FollowerQty      float64       `json:"follower_qty"`
+	Price            float64       `json:"price"`
+	PriceSource      string        `json:"price_source"`
+	MinNotionalHit   bool          `json:"min_notional_hit"`
+	MaxNotionalHit   bool          `json:"max_notional_hit"`
+	Skipped          bool          `json:"skipped"`
+	SkipReason       string        `json:"skip_reason"`
+	CopySkipReason   string        `json:"copy_skip_reason"` // 文案
+	ErrCode          string        `json:"err_code"`         // 分类错误码
 	// 公式展示辅助
 	Formula string `json:"formula"`
 }
@@ -267,15 +267,15 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	}
 
 	decision := &CopyDecision{
-		ProviderEvent:   ev,
-		FollowerEquity:  followerEquity,
+		ProviderEvent:    ev,
+		FollowerEquity:   followerEquity,
 		FollowerNotional: followerNotional,
-		FollowerQty:     qty,
-		Price:           price,
-		PriceSource:     priceSource,
-		MinNotionalHit:  minHit,
-		MaxNotionalHit:  maxHit,
-		Formula:         fmt.Sprintf("follow_notional=max(min, (%.4f/%.4f)*%.4f*%.2f%%)=%.4f qty=%.8f", leaderNotional, ev.LeaderEquity, followerEquity, s.cfg.CopyRatio, followerNotional, qty),
+		FollowerQty:      qty,
+		Price:            price,
+		PriceSource:      priceSource,
+		MinNotionalHit:   minHit,
+		MaxNotionalHit:   maxHit,
+		Formula:          fmt.Sprintf("follow_notional=max(min, (%.4f/%.4f)*%.4f*%.2f%%)=%.4f qty=%.8f", leaderNotional, ev.LeaderEquity, followerEquity, s.cfg.CopyRatio, followerNotional, qty),
 	}
 
 	if err := s.executor.ExecuteCopy(s.ctx, decision); err != nil {
@@ -458,11 +458,9 @@ func (s *Service) handleFollowerPositions(ev ProviderEvent) bool {
 		}
 	}
 
-	// 同向仓位存在则跳过开/加仓
 	if hasSame {
-		logger.Infof("copysync: skip %s %s due to follower position exists", ev.Symbol, ev.Action)
-		s.logSkip(ev, "follower_position_exists")
-		return true
+		logger.Infof("copysync: follower has same-side position for %s, continue %s", ev.Symbol, ev.Action)
 	}
+
 	return false
 }

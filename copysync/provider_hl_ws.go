@@ -1,10 +1,11 @@
 package copysync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
+	"net/http"
 	"nofx/logger"
 	"strconv"
 	"strings"
@@ -21,10 +22,16 @@ type HyperliquidWSProvider struct {
 	events  chan ProviderEvent
 	cursor  int64 // 使用 fill 的 time 作为游标
 
-	conn   *websocket.Conn
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	once   sync.Once
+	conn          *websocket.Conn
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	once          sync.Once
+	httpClient    *http.Client
+	equityMu      sync.RWMutex
+	leaderEquity  float64
+	marginModeMap map[string]string
+	seenMu        sync.Mutex
+	seenTids      map[int64]struct{}
 }
 
 type hlWSMessage struct {
@@ -39,8 +46,11 @@ type hlWSUserData struct {
 // NewHyperliquidWSProvider 创建 WS Provider
 func NewHyperliquidWSProvider(address string) Provider {
 	return &HyperliquidWSProvider{
-		address: address,
-		events:  make(chan ProviderEvent, 256),
+		address:       address,
+		events:        make(chan ProviderEvent, 256),
+		httpClient:    &http.Client{Timeout: 10 * time.Second},
+		marginModeMap: make(map[string]string),
+		seenTids:      make(map[int64]struct{}),
 	}
 }
 
@@ -72,24 +82,66 @@ func (p *HyperliquidWSProvider) Stop(ctx context.Context) error {
 func (p *HyperliquidWSProvider) Events() <-chan ProviderEvent { return p.events }
 
 func (p *HyperliquidWSProvider) Snapshot(ctx context.Context) (*LeaderState, error) {
-	// WS 模式不提供快照，返回空
-	return &LeaderState{Equity: 0, Positions: make(map[string]*LeaderPosition), Timestamp: time.Now()}, nil
+	// 使用 HTTP 获取快照，便于对账
+	if err := p.refreshClearinghouse(ctx); err != nil {
+		return nil, err
+	}
+	positions := make(map[string]*LeaderPosition)
+	p.equityMu.RLock()
+	equity := p.leaderEquity
+	for coin, mode := range p.marginModeMap {
+		positions[coin+"_any"] = &LeaderPosition{
+			Symbol:     coin,
+			MarginMode: mode,
+		}
+	}
+	p.equityMu.RUnlock()
+	return &LeaderState{
+		Equity:    equity,
+		Positions: positions,
+		Timestamp: time.Now(),
+	}, nil
 }
 
 func (p *HyperliquidWSProvider) GetCursor() int64  { return p.cursor }
 func (p *HyperliquidWSProvider) SetCursor(v int64) { p.cursor = v }
 
 func (p *HyperliquidWSProvider) run(ctx context.Context) {
-	for {
-		if err := p.connectAndSubscribe(); err != nil {
-			logger.Infof("HL WS connect failed: %v, retry in 2s", err)
+	backoffs := []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
+	attempt := 0
+	// 启动前先拉一次净值/模式
+	_ = p.refreshClearinghouse(ctx)
+	// 低频刷新净值/模式
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-ticker.C:
+				_ = p.refreshClearinghouse(ctx)
+			}
+		}
+	}()
+	for {
+		if err := p.connectAndSubscribe(); err != nil {
+			if attempt >= len(backoffs) {
+				attempt = len(backoffs) - 1
+			}
+			delay := backoffs[attempt]
+			logger.Infof("HL WS connect failed: %v, retry in %s", err, delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+				attempt++
 				continue
 			}
 		}
+		attempt = 0
 		if err := p.readLoop(ctx); err != nil {
 			logger.Infof("HL WS read error: %v, reconnecting...", err)
 		}
@@ -180,6 +232,18 @@ func (p *HyperliquidWSProvider) handleMessage(msg []byte) {
 		if f.Time <= p.cursor {
 			continue
 		}
+		// tid 去重
+		p.seenMu.Lock()
+		if _, ok := p.seenTids[f.Tid]; ok {
+			p.seenMu.Unlock()
+			continue
+		}
+		p.seenTids[f.Tid] = struct{}{}
+		if len(p.seenTids) > 2000 {
+			p.seenTids = make(map[int64]struct{}) // 简单裁剪，避免内存膨胀
+		}
+		p.seenMu.Unlock()
+
 		ev, ok := p.fillToEvent(f)
 		if !ok {
 			continue
@@ -206,6 +270,10 @@ func (p *HyperliquidWSProvider) fillToEvent(f hlFill) (ProviderEvent, bool) {
 	if roundedTime == 0 {
 		roundedTime = time.Now().UnixMilli()
 	}
+	p.equityMu.RLock()
+	equity := p.leaderEquity
+	marginMode := p.marginModeMap[strings.ToUpper(f.Coin)]
+	p.equityMu.RUnlock()
 	return ProviderEvent{
 		TraceID:      fmt.Sprintf("hl-ws-%d", f.Tid),
 		SourceID:     p.address,
@@ -217,39 +285,50 @@ func (p *HyperliquidWSProvider) fillToEvent(f hlFill) (ProviderEvent, bool) {
 		PriceSource:  "fill",
 		Size:         size,
 		Notional:     price * size,
-		LeaderEquity: 0,  // WS 未返回净值，需依赖外部净值获取（可选）
-		MarginMode:   "", // WS 未返回模式，低频用 HTTP 或外部注入
+		LeaderEquity: equity,
+		MarginMode:   marginMode,
 		Timestamp:    time.UnixMilli(roundedTime),
 		Seq:          roundedTime,
 	}, true
 }
 
-// deriveHLAction 复用 dir/startPosition 逻辑
-func deriveHLAction(dir string, startPos float64, sz float64) (string, string) {
-	switch dir {
-	case "Open Long":
-		if startPos == 0 {
-			return "open", "long"
-		}
-		return "add", "long"
-	case "Open Short":
-		if startPos == 0 {
-			return "open", "short"
-		}
-		return "add", "short"
-	case "Close Long":
-		after := startPos - sz
-		if math.Abs(after) < 1e-9 {
-			return "close", "long"
-		}
-		return "reduce", "long"
-	case "Close Short":
-		after := startPos + sz
-		if math.Abs(after) < 1e-9 {
-			return "close", "short"
-		}
-		return "reduce", "short"
-	default:
-		return "", ""
+func (p *HyperliquidWSProvider) refreshClearinghouse(ctx context.Context) error {
+	payload := map[string]interface{}{
+		"type": "clearinghouseState",
+		"user": p.address,
 	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, "POST", "https://api.hyperliquid.xyz/info", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var respWrap hlClearingResp
+	if err := json.NewDecoder(resp.Body).Decode(&respWrap); err != nil {
+		return err
+	}
+	if !respWrap.Success || respWrap.Data == nil || respWrap.Data.MarginSummary == nil {
+		return fmt.Errorf("hl clearinghouseState not success")
+	}
+
+	equity, _ := strconv.ParseFloat(respWrap.Data.MarginSummary.AccountValue, 64)
+	modeMap := make(map[string]string)
+	for _, ap := range respWrap.Data.AssetPositions {
+		coin := strings.ToUpper(ap.Position.Coin)
+		mode := ap.Position.Leverage.Type
+		if mode == "" {
+			mode = "cross"
+		}
+		modeMap[coin] = mode
+	}
+
+	p.equityMu.Lock()
+	p.leaderEquity = equity
+	p.marginModeMap = modeMap
+	p.equityMu.Unlock()
+	return nil
 }

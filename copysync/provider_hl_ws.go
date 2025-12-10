@@ -7,6 +7,7 @@ import (
 	"math"
 	"nofx/logger"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -108,21 +109,25 @@ func (p *HyperliquidWSProvider) connectAndSubscribe() error {
 		return err
 	}
 	p.conn = c
+	addr := strings.ToLower(p.address)
 	subMsg := map[string]interface{}{
 		"method": "subscribe",
 		"subscription": map[string]interface{}{
 			"type": "userEvents",
-			"user": p.address,
+			"user": addr,
 		},
 	}
 	if err := p.conn.WriteJSON(subMsg); err != nil {
 		return err
 	}
-	logger.Infof("HL WS subscribed userEvents for %s", p.address)
+	logger.Infof("HL WS subscribed userEvents for %s", addr)
 	return nil
 }
 
 func (p *HyperliquidWSProvider) readLoop(ctx context.Context) error {
+	pingTicker := time.NewTicker(20 * time.Second)
+	defer pingTicker.Stop()
+
 	p.conn.SetReadLimit(1 << 20)
 	p.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	p.conn.SetPongHandler(func(appData string) error {
@@ -134,6 +139,11 @@ func (p *HyperliquidWSProvider) readLoop(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-pingTicker.C:
+			_ = p.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := p.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return fmt.Errorf("ping failed: %w", err)
+			}
 		default:
 		}
 		_, msg, err := p.conn.ReadMessage()
@@ -152,7 +162,8 @@ func (p *HyperliquidWSProvider) handleMessage(msg []byte) {
 		return
 	}
 	if envelope.Channel != "user" {
-		// 订阅响应等，忽略
+		// 订阅响应等，打印一次
+		logger.Infof("HL WS recv channel=%s data=%s", envelope.Channel, string(envelope.Data))
 		return
 	}
 	var data hlWSUserData
@@ -160,6 +171,10 @@ func (p *HyperliquidWSProvider) handleMessage(msg []byte) {
 		logger.Infof("HL WS user data parse failed: %v body=%s", err, string(envelope.Data))
 		return
 	}
+	if len(data.Fills) == 0 {
+		return
+	}
+	logger.Infof("HL WS fills received: count=%d first_tid=%d", len(data.Fills), data.Fills[0].Tid)
 	for _, f := range data.Fills {
 		// 过滤已处理游标
 		if f.Time <= p.cursor {

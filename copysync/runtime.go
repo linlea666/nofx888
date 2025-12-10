@@ -32,7 +32,8 @@ func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID 
 		if addr == "" {
 			return nil, fmt.Errorf("copysync: hyperliquid_wallet requires provider_params.address")
 		}
-		provider = NewHyperliquidAPIProvider(addr)
+		// 默认使用 WS 模式；若需要 HTTP 兜底可改为 API Provider
+		provider = NewHyperliquidWSProvider(addr)
 	default:
 		return nil, fmt.Errorf("copysync: unsupported provider_type %s", cfg.ProviderType)
 	}

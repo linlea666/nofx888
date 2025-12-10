@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"sync"
@@ -216,7 +217,7 @@ func (p *HyperliquidAPIProvider) fillToEvent(f hlFill) (ProviderEvent, bool) {
 	size, _ := strconv.ParseFloat(f.Sz, 64)
 	startPos, _ := strconv.ParseFloat(f.StartPosition, 64)
 
-	action, side := deriveHLAction(f.Dir, startPos, size)
+	action, side := deriveHLActionHL(f.Dir, startPos, size)
 	if action == "" || side == "" {
 		return ProviderEvent{}, false
 	}
@@ -244,7 +245,7 @@ func (p *HyperliquidAPIProvider) fillToEvent(f hlFill) (ProviderEvent, bool) {
 	}, true
 }
 
-func deriveHLAction(dir string, startPos float64, sz float64) (string, string) {
+func deriveHLActionHL(dir string, startPos float64, sz float64) (string, string) {
 	switch dir {
 	case "Open Long":
 		if startPos == 0 {
@@ -258,13 +259,13 @@ func deriveHLAction(dir string, startPos float64, sz float64) (string, string) {
 		return "add", "short"
 	case "Close Long":
 		after := startPos - sz
-		if after == 0 {
+		if math.Abs(after) < 1e-9 {
 			return "close", "long"
 		}
 		return "reduce", "long"
 	case "Close Short":
 		after := startPos + sz
-		if after == 0 {
+		if math.Abs(after) < 1e-9 {
 			return "close", "short"
 		}
 		return "reduce", "short"

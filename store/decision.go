@@ -32,21 +32,21 @@ type DecisionRecord struct {
 	Decisions           []DecisionAction   `json:"decisions"`
 
 	// 跟单扩展字段（可选，使用 decision_json/extra 保存亦可）
-	TraceID         string  `json:"trace_id,omitempty"`
-	ProviderType    string  `json:"provider_type,omitempty"`
-	LeaderEquity    float64 `json:"leader_equity,omitempty"`
-	LeaderNotional  float64 `json:"leader_notional,omitempty"`
-	LeaderPrice     float64 `json:"leader_price,omitempty"`
-	PriceSource     string  `json:"price_source,omitempty"`
-	FollowerEquity  float64 `json:"follower_equity,omitempty"`
+	TraceID          string  `json:"trace_id,omitempty"`
+	ProviderType     string  `json:"provider_type,omitempty"`
+	LeaderEquity     float64 `json:"leader_equity,omitempty"`
+	LeaderNotional   float64 `json:"leader_notional,omitempty"`
+	LeaderPrice      float64 `json:"leader_price,omitempty"`
+	PriceSource      string  `json:"price_source,omitempty"`
+	FollowerEquity   float64 `json:"follower_equity,omitempty"`
 	FollowerNotional float64 `json:"follower_notional,omitempty"`
-	FollowerQty     float64 `json:"follower_qty,omitempty"`
-	CopyRatio       float64 `json:"copy_ratio,omitempty"`
-	Formula         string  `json:"formula,omitempty"`
-	MinHit          bool    `json:"min_hit,omitempty"`
-	MaxHit          bool    `json:"max_hit,omitempty"`
-	CopySkipReason  string  `json:"copy_skip_reason,omitempty"`
-	ErrCode         string  `json:"err_code,omitempty"`
+	FollowerQty      float64 `json:"follower_qty,omitempty"`
+	CopyRatio        float64 `json:"copy_ratio,omitempty"`
+	Formula          string  `json:"formula,omitempty"`
+	MinHit           bool    `json:"min_hit,omitempty"`
+	MaxHit           bool    `json:"max_hit,omitempty"`
+	CopySkipReason   string  `json:"copy_skip_reason,omitempty"`
+	ErrCode          string  `json:"err_code,omitempty"`
 }
 
 // AccountSnapshot 账户状态快照
@@ -73,19 +73,19 @@ type PositionSnapshot struct {
 
 // DecisionAction 决策动作
 type DecisionAction struct {
-	Action    string    `json:"action"`
-	Symbol    string    `json:"symbol"`
-	Quantity  float64   `json:"quantity"`
-	Leverage  int       `json:"leverage"`
-	Price     float64   `json:"price"`
-	OrderID   int64     `json:"order_id"`
-	Timestamp time.Time `json:"timestamp"`
-	Success   bool      `json:"success"`
-	Error     string    `json:"error"`
-	TraceID   string    `json:"trace_id,omitempty"`
-	PriceSource string  `json:"price_source,omitempty"`
-	MinHit    bool      `json:"min_hit,omitempty"`
-	MaxHit    bool      `json:"max_hit,omitempty"`
+	Action      string    `json:"action"`
+	Symbol      string    `json:"symbol"`
+	Quantity    float64   `json:"quantity"`
+	Leverage    int       `json:"leverage"`
+	Price       float64   `json:"price"`
+	OrderID     int64     `json:"order_id"`
+	Timestamp   time.Time `json:"timestamp"`
+	Success     bool      `json:"success"`
+	Error       string    `json:"error"`
+	TraceID     string    `json:"trace_id,omitempty"`
+	PriceSource string    `json:"price_source,omitempty"`
+	MinHit      bool      `json:"min_hit,omitempty"`
+	MaxHit      bool      `json:"max_hit,omitempty"`
 }
 
 // Statistics 统计信息
@@ -189,7 +189,7 @@ func (s *DecisionStore) LogDecision(record *DecisionRecord) error {
 			success, error_message, ai_request_duration_ms,
 			trace_id, provider_type, leader_equity, leader_notional, leader_price, price_source,
        follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason, err_code
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.TraderID, record.CycleNumber, record.Timestamp.Format(time.RFC3339),
 		record.SystemPrompt, record.InputPrompt, record.CoTTrace, record.DecisionJSON,
@@ -417,8 +417,8 @@ func (s *DecisionStore) scanDecisionRecord(rows *sql.Rows) (*DecisionRecord, err
 		traceID, providerType, priceSource, formula, copySkipReason sql.NullString
 		leaderEquity, leaderNotional, leaderPrice                   sql.NullFloat64
 		followerEquity, followerNotional, followerQty, copyRatio    sql.NullFloat64
-		minHit, maxHit                                               sql.NullBool
-		errCode                                                      sql.NullString
+		minHit, maxHit                                              sql.NullBool
+		errCode                                                     sql.NullString
 	)
 	scanTargets = append(scanTargets,
 		&traceID, &providerType, &leaderEquity, &leaderNotional, &leaderPrice, &priceSource,

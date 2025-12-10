@@ -327,9 +327,18 @@ func (t *HyperliquidTrader) SetLeverage(symbol string, leverage int) error {
 
 	// 调用UpdateLeverage (leverage int, name string, isCross bool)
 	// 第三个参数: true=全仓模式, false=逐仓模式
-	_, err := t.exchange.UpdateLeverage(t.ctx, leverage, coin, t.isCrossMargin)
+	logger.Infof("🔧 [HL] SetLeverage request: coin=%s leverage=%d cross=%v", coin, leverage, t.isCrossMargin)
+	resp, err := t.exchange.UpdateLeverage(t.ctx, leverage, coin, t.isCrossMargin)
 	if err != nil {
+		// 捕获底层错误文本，便于排查 422
+		logger.Infof("❌ [HL] SetLeverage failed: coin=%s leverage=%d cross=%v err=%v", coin, leverage, t.isCrossMargin, err)
 		return fmt.Errorf("设置杠杆失败: %w", err)
+	}
+	// 成功时打印返回体，方便对比接口要求（避免 422）
+	if resp != nil {
+		if b, marshalErr := json.Marshal(resp); marshalErr == nil {
+			logger.Infof("✅ [HL] SetLeverage response: %s", string(b))
+		}
 	}
 
 	logger.Infof("  ✓ %s 杠杆已切换为 %dx", symbol, leverage)

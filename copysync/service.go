@@ -160,36 +160,6 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		logger.Infof("copysync: skip %s %s due to follow switch off", ev.Symbol, ev.Action)
 		return
 	}
-
-	// 基线过滤：已有仓位不跟（直到归零后重新开仓）
-	if s.baseline != nil && s.baseline.Positions != nil {
-		// 快照过期则忽略基线
-		if !s.baseline.Timestamp.IsZero() && time.Since(s.baseline.Timestamp) > 2*time.Hour {
-			logger.Infof("copysync: baseline expired, refreshing before %s", ev.Symbol)
-			if snap, err := s.provider.Snapshot(s.ctx); err == nil {
-				s.SetBaseline(snap)
-				s.reconcileFollowerPositions()
-			} else {
-				// 基线失效，避免一直阻塞，清空
-				s.baseline = nil
-			}
-		} else {
-			keyLong := fmt.Sprintf("%s_long", ev.Symbol)
-			keyShort := fmt.Sprintf("%s_short", ev.Symbol)
-			pos := s.baseline.Positions[keyLong]
-			if pos == nil {
-				pos = s.baseline.Positions[keyShort]
-			}
-			if pos != nil && pos.Size > 0 {
-				// 如果是 close 动作允许通过，否则跳过
-				if ev.Action != "close" && ev.Action != "reduce" {
-					logger.Infof("copysync: skip %s %s due to baseline position", ev.Symbol, ev.Action)
-					s.logSkip(ev, "baseline_skip")
-					return
-				}
-			}
-		}
-	}
 	// 额外防重复：若跟随端已有同向仓位且事件为开/加仓，跳过；若存在反向仓位则先尝试平掉
 	if ev.Action == "open" || ev.Action == "add" {
 		if s.handleFollowerPositions(ev) {

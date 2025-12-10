@@ -1,7 +1,6 @@
 package copysync
 
 import (
-	"encoding/json"
 	"fmt"
 	"nofx/market"
 	"nofx/store"
@@ -24,7 +23,7 @@ func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID 
 		if uniqueName == "" {
 			return nil, fmt.Errorf("copysync: okx_wallet requires provider_params.uniqueName")
 		}
-		provider = NewOKXProvider(uniqueName)
+		provider = NewOKXPositionProvider(uniqueName)
 	case "hl_wallet", "hyperliquid_wallet":
 		addr := ""
 		if cfg.ProviderParams != nil {
@@ -33,7 +32,7 @@ func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID 
 		if addr == "" {
 			return nil, fmt.Errorf("copysync: hyperliquid_wallet requires provider_params.address")
 		}
-		provider = NewHyperliquidProvider(addr)
+		provider = NewHyperliquidAPIProvider(addr)
 	default:
 		return nil, fmt.Errorf("copysync: unsupported provider_type %s", cfg.ProviderType)
 	}
@@ -96,15 +95,6 @@ func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID 
 		if lastSeqStr, ok := cfg.ProviderParams["last_seq"]; ok {
 			if seq, err := strconv.ParseInt(lastSeqStr, 10, 64); err == nil {
 				provider.SetCursor(seq)
-			}
-		}
-	}
-	// 从 provider_params 读取 baseline_snapshot 作为基线
-	if cfg.ProviderParams != nil {
-		if snapStr, ok := cfg.ProviderParams["baseline_snapshot"]; ok && snapStr != "" {
-			var snap LeaderState
-			if err := json.Unmarshal([]byte(snapStr), &snap); err == nil {
-				service.SetBaseline(&snap)
 			}
 		}
 	}

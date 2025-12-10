@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"nofx/logger"
 	"strconv"
@@ -307,32 +308,36 @@ func (p *HyperliquidWSProvider) refreshClearinghouse(ctx context.Context) error 
 	}
 	defer resp.Body.Close()
 
+	rawBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
 	// 兼容两种返回格式：{"success":true,"data":{...}} 或直接返回 data 对象
 	var wrapper struct {
 		Success *bool           `json:"success"`
 		Data    json.RawMessage `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
-		return err
-	}
-	var dataBytes []byte
-	if wrapper.Success == nil {
-		// 直接是 data
-		raw, _ := json.Marshal(wrapper)
-		dataBytes = raw
-	} else {
-		if !*wrapper.Success || len(wrapper.Data) == 0 {
-			return fmt.Errorf("hl clearinghouseState not success")
-		}
-		dataBytes = wrapper.Data
-	}
+	_ = json.Unmarshal(rawBytes, &wrapper)
 
 	var data hlClearingData
-	if err := json.Unmarshal(dataBytes, &data); err != nil {
-		return err
+	if wrapper.Success != nil && len(wrapper.Data) > 0 {
+		if *wrapper.Success {
+			if err := json.Unmarshal(wrapper.Data, &data); err != nil {
+				return err
+			}
+		} else {
+			return fmt.Errorf("hl clearinghouseState not success")
+		}
+	} else {
+		// 尝试直接解析为数据体
+		if err := json.Unmarshal(rawBytes, &data); err != nil {
+			return fmt.Errorf("hl clearinghouseState decode failed: %w body=%s", err, string(rawBytes))
+		}
 	}
+
 	if data.MarginSummary == nil {
-		return fmt.Errorf("hl clearinghouseState missing margin summary")
+		return fmt.Errorf("hl clearinghouseState missing margin summary body=%s", string(rawBytes))
 	}
 
 	equity, _ := strconv.ParseFloat(data.MarginSummary.AccountValue, 64)

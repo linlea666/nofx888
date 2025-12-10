@@ -322,6 +322,12 @@ func (t *HyperliquidTrader) SetMarginMode(symbol string, isCrossMargin bool) err
 
 // SetLeverage 设置杠杆
 func (t *HyperliquidTrader) SetLeverage(symbol string, leverage int) error {
+	// Hyperliquid 不接受 0 或负数杠杆；如果上游未给出杠杆，跳过以避免 422
+	if leverage <= 0 {
+		logger.Infof("🔧 [HL] Skip SetLeverage: coin=%s leverage=%d (ignored, must be >0)", symbol, leverage)
+		return nil
+	}
+
 	// Hyperliquid symbol格式（去掉USDT后缀）
 	coin := convertSymbolToHyperliquid(symbol)
 

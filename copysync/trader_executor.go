@@ -37,15 +37,17 @@ func (e *TraderExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecision
 		return fmt.Errorf("copysync: trader is nil")
 	}
 
-	// 杠杆/保证金模式同步（尽力而为）
-	if e.EnableMarginSync && decision.ProviderEvent.MarginMode != "" {
-		if err := e.Trader.SetMarginMode(decision.ProviderEvent.Symbol, decision.ProviderEvent.MarginMode == "cross"); err != nil {
-			logger.Infof("copysync: margin mode sync failed %v", err)
+	// 杠杆/保证金模式同步（仅在开/加仓且参数有效时尝试，避免无谓 422）
+	if decision.ProviderEvent.Action == "open" || decision.ProviderEvent.Action == "add" {
+		if e.EnableMarginSync && decision.ProviderEvent.MarginMode != "" {
+			if err := e.Trader.SetMarginMode(decision.ProviderEvent.Symbol, decision.ProviderEvent.MarginMode == "cross"); err != nil {
+				logger.Infof("copysync: margin mode sync failed %v", err)
+			}
 		}
-	}
-	if e.EnableLeverageSync && decision.ProviderEvent.Leverage > 0 {
-		if err := e.Trader.SetLeverage(decision.ProviderEvent.Symbol, int(decision.ProviderEvent.Leverage)); err != nil {
-			logger.Infof("copysync: leverage sync failed %v", err)
+		if e.EnableLeverageSync && decision.ProviderEvent.Leverage > 0 {
+			if err := e.Trader.SetLeverage(decision.ProviderEvent.Symbol, int(decision.ProviderEvent.Leverage)); err != nil {
+				logger.Infof("copysync: leverage sync failed %v", err)
+			}
 		}
 	}
 
@@ -73,6 +75,10 @@ func (e *TraderExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecision
 			rawRatio := decision.ProviderEvent.Notional / decision.ProviderEvent.LeaderEquity
 			target := rawRatio * decision.FollowerEquity * (e.Config.CopyRatio / 100.0)
 			decision.Formula = fmt.Sprintf("raw_ratio=%.6f target_notional=%.4f adjusted_notional=%.4f qty=%.8f price=%.4f", rawRatio, target, decision.FollowerNotional, decision.FollowerQty, decision.Price)
+		}
+		// 再次检查最小成交额，防止格式化后掉到阈值以下
+		if decision.FollowerNotional > 0 && e.Config.MinNotional > 0 && decision.FollowerNotional < e.Config.MinNotional {
+			return fmt.Errorf("copysync: min_notional_not_met %.4f < %.4f", decision.FollowerNotional, e.Config.MinNotional)
 		}
 	}
 

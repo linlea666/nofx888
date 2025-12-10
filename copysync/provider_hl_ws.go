@@ -307,17 +307,37 @@ func (p *HyperliquidWSProvider) refreshClearinghouse(ctx context.Context) error 
 	}
 	defer resp.Body.Close()
 
-	var respWrap hlClearingResp
-	if err := json.NewDecoder(resp.Body).Decode(&respWrap); err != nil {
+	// 兼容两种返回格式：{"success":true,"data":{...}} 或直接返回 data 对象
+	var wrapper struct {
+		Success *bool           `json:"success"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
 		return err
 	}
-	if !respWrap.Success || respWrap.Data == nil || respWrap.Data.MarginSummary == nil {
-		return fmt.Errorf("hl clearinghouseState not success")
+	var dataBytes []byte
+	if wrapper.Success == nil {
+		// 直接是 data
+		raw, _ := json.Marshal(wrapper)
+		dataBytes = raw
+	} else {
+		if !*wrapper.Success || len(wrapper.Data) == 0 {
+			return fmt.Errorf("hl clearinghouseState not success")
+		}
+		dataBytes = wrapper.Data
 	}
 
-	equity, _ := strconv.ParseFloat(respWrap.Data.MarginSummary.AccountValue, 64)
+	var data hlClearingData
+	if err := json.Unmarshal(dataBytes, &data); err != nil {
+		return err
+	}
+	if data.MarginSummary == nil {
+		return fmt.Errorf("hl clearinghouseState missing margin summary")
+	}
+
+	equity, _ := strconv.ParseFloat(data.MarginSummary.AccountValue, 64)
 	modeMap := make(map[string]string)
-	for _, ap := range respWrap.Data.AssetPositions {
+	for _, ap := range data.AssetPositions {
 		coin := strings.ToUpper(ap.Position.Coin)
 		mode := ap.Position.Leverage.Type
 		if mode == "" {

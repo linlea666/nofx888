@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+// MinLimitProvider 可选接口：提供交易所最小成交额/最小数量
+type MinLimitProvider interface {
+	MinNotional(symbol string) (float64, bool)
+	MinQty(symbol string) (float64, bool)
+}
+
 // TraderExecutor 将 CopyDecision 映射到交易接口下单/平仓接口。
 // 注意：精度/最小单校验依赖交易所自身，若需前置校验可在此补充。
 type TraderExecutor struct {
@@ -79,6 +85,18 @@ func (e *TraderExecutor) ExecuteCopy(ctx context.Context, decision *CopyDecision
 		// 再次检查最小成交额，防止格式化后掉到阈值以下
 		if decision.FollowerNotional > 0 && e.Config.MinNotional > 0 && decision.FollowerNotional < e.Config.MinNotional {
 			return fmt.Errorf("copysync: min_notional_not_met %.4f < %.4f", decision.FollowerNotional, e.Config.MinNotional)
+		}
+		// 如交易器提供最小名义价值，做兜底校验
+		if limit, ok := e.Trader.(MinLimitProvider); ok {
+			if minNotional, ok2 := limit.MinNotional(decision.ProviderEvent.Symbol); ok2 && minNotional > 0 && decision.FollowerNotional < minNotional {
+				return fmt.Errorf("copysync: min_notional_not_met %.4f < %.4f (exchange)", decision.FollowerNotional, minNotional)
+			}
+		}
+	}
+	// 最小数量兜底
+	if limit, ok := e.Trader.(MinLimitProvider); ok {
+		if minQty, ok2 := limit.MinQty(decision.ProviderEvent.Symbol); ok2 && minQty > 0 && formattedQty < minQty {
+			return fmt.Errorf("copysync: min_qty_not_met %.8f < %.8f (exchange)", formattedQty, minQty)
 		}
 	}
 

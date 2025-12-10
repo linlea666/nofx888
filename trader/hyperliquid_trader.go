@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
+	"math"
 	"nofx/logger"
 	"strconv"
 	"strings"
@@ -22,6 +23,33 @@ type HyperliquidTrader struct {
 	meta          *hyperliquid.Meta // 缓存meta信息（包含精度等）
 	metaMutex     sync.RWMutex      // 保护meta字段的并发访问
 	isCrossMargin bool              // 是否为全仓模式
+}
+
+// MinNotional 返回基于最小数量和最新价的名义下限（最佳努力）
+func (t *HyperliquidTrader) MinNotional(symbol string) (float64, bool) {
+	minQty, ok := t.MinQty(symbol)
+	if !ok || minQty <= 0 {
+		return 0, false
+	}
+	price, err := t.GetMarketPrice(symbol)
+	if err != nil || price <= 0 {
+		return 0, false
+	}
+	return minQty * price, true
+}
+
+// MinQty 返回基于 szDecimals 的最小数量（最佳努力）
+func (t *HyperliquidTrader) MinQty(symbol string) (float64, bool) {
+	coin := convertSymbolToHyperliquid(symbol)
+	decimals := t.getSzDecimals(coin)
+	if decimals <= 0 {
+		return 0, false
+	}
+	pow := math.Pow10(decimals)
+	if pow == 0 {
+		return 0, false
+	}
+	return 1.0 / pow, true
 }
 
 // NewHyperliquidTrader 创建Hyperliquid交易器

@@ -74,6 +74,34 @@ type OKXInstrument struct {
 	CtType string  // 合约类型
 }
 
+// MinNotional 返回基于最小数量和市价的名义下限（最佳努力）
+func (t *OKXTrader) MinNotional(symbol string) (float64, bool) {
+	minQty, ok := t.MinQty(symbol)
+	if !ok || minQty <= 0 {
+		return 0, false
+	}
+	price, err := t.GetMarketPrice(symbol)
+	if err != nil || price <= 0 {
+		return 0, false
+	}
+	return minQty * price, true
+}
+
+// MinQty 返回合约最小下单数量（lot/minSz）
+func (t *OKXTrader) MinQty(symbol string) (float64, bool) {
+	inst, err := t.getInstrument(symbol)
+	if err != nil {
+		return 0, false
+	}
+	if inst.MinSz > 0 {
+		return inst.MinSz, true
+	}
+	if inst.LotSz > 0 {
+		return inst.LotSz, true
+	}
+	return 0, false
+}
+
 // OKXResponse OKX API响应
 type OKXResponse struct {
 	Code string          `json:"code"`

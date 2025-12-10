@@ -9,13 +9,16 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"nofx/logger"
 )
 
 // OKXPositionProvider 通过持仓变化生成事件，成交记录仅作校验/补充。
 type OKXPositionProvider struct {
-	uniqueName string
-	events     chan ProviderEvent
-	cursor     int64 // 使用持仓更新时间 uTime 作为游标
+	uniqueName  string
+	events      chan ProviderEvent
+	cursor      int64 // 使用持仓更新时间 uTime 作为游标
+	tradeCursor int64 // 记录 trade-records 的 fillTime 游标，仅用于日志
 
 	httpClient *http.Client
 	cancel     context.CancelFunc
@@ -89,6 +92,22 @@ func (p *OKXPositionProvider) Start(ctx context.Context) error {
 				return
 			case <-ticker.C:
 				_ = p.refreshEquity(ctx)
+			}
+		}
+	}()
+
+	// 低频拉取 trade-records 作为补充日志/校验
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = p.refreshTrades(ctx)
 			}
 		}
 	}()
@@ -347,4 +366,56 @@ func (p *OKXPositionProvider) refreshEquity(ctx context.Context) error {
 func (p *OKXPositionProvider) convertInstId(instID string) string {
 	// 直接返回 instID，或去掉 "-SWAP"
 	return instID
+}
+
+// refreshTrades 拉取 OKX 社区成交记录，作为补充日志（不生成事件）。
+func (p *OKXPositionProvider) refreshTrades(ctx context.Context) error {
+	// 使用 tradeCursor 作为 startModify，默认近 24h 窗口
+	now := time.Now().UnixMilli()
+	start := p.tradeCursor
+	if start == 0 {
+		start = now - 24*60*60*1000
+	}
+	url := fmt.Sprintf("https://www.okx.com/priapi/v5/ecotrade/public/community/user/trade-records?uniqueName=%s&startModify=%d&endModify=%d&instType=SWAP&limit=50", p.uniqueName, start, now)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var parsed struct {
+		Code string `json:"code"`
+		Data []struct {
+			InstID   string `json:"instId"`
+			PosSide  string `json:"posSide"`
+			Side     string `json:"side"`
+			AvgPx    string `json:"avgPx"`
+			Sz       string `json:"sz"`
+			Value    string `json:"value"`
+			FillTime string `json:"fillTime"`
+			OrdID    string `json:"ordId"`
+			Lever    string `json:"lever"`
+			TradeCcy string `json:"tradeQuoteCcy"`
+		} `json:"data"`
+		Msg string `json:"msg"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return err
+	}
+	if parsed.Code != "0" {
+		return fmt.Errorf("okx trade-records code=%s msg=%s", parsed.Code, parsed.Msg)
+	}
+	maxFill := p.tradeCursor
+	for _, tr := range parsed.Data {
+		ft, _ := strconv.ParseInt(tr.FillTime, 10, 64)
+		if ft > maxFill {
+			maxFill = ft
+		}
+		logger.Infof("okx trade log: inst=%s posSide=%s side=%s sz=%s px=%s notional=%s lev=%s", tr.InstID, tr.PosSide, tr.Side, tr.Sz, tr.AvgPx, tr.Value, tr.Lever)
+	}
+	if maxFill > p.tradeCursor {
+		p.tradeCursor = maxFill
+	}
+	return nil
 }

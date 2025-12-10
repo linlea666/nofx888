@@ -386,10 +386,25 @@ func (at *AutoTrader) Run() error {
 				}
 				ce := dec.ProviderEvent
 				decJSON, _ := json.Marshal(dec)
+				// 周期号与 AI 统一：同一 trader 递增
+				at.cycleNumber++
+				cycle := at.cycleNumber
+				ts := time.Now()
+				if !ce.Timestamp.IsZero() {
+					ts = ce.Timestamp
+				}
+
+				// 追加可读的执行日志，便于前端展示
+				execLog := []string{
+					fmt.Sprintf("领航员成交额: %.4f, 领航员净值: %.4f, 原始比例: %.6f", ce.Notional, ce.LeaderEquity, safeDiv(ce.Notional, ce.LeaderEquity)),
+					fmt.Sprintf("跟随净值: %.4f, 跟单系数: %.2f%%, 目标成交额: %.4f (min_hit=%v max_hit=%v)", dec.FollowerEquity, at.config.CopyConfig.CopyRatio, dec.FollowerNotional, dec.MinNotionalHit, dec.MaxNotionalHit),
+					fmt.Sprintf("下单价: %.4f(%s), 数量: %.8f, TraceID: %s", dec.Price, dec.PriceSource, dec.FollowerQty, ce.TraceID),
+				}
+
 				rec := &store.DecisionRecord{
 					TraderID:         at.id,
-					CycleNumber:      0, // 跟单模式可置 0
-					Timestamp:        time.Now(),
+					CycleNumber:      cycle,
+					Timestamp:        ts,
 					DecisionJSON:     string(decJSON), // 保存跟单决策详情
 					Success:          !dec.Skipped,
 					ErrorMessage:     dec.SkipReason,
@@ -408,6 +423,7 @@ func (at *AutoTrader) Run() error {
 					MinHit:           dec.MinNotionalHit,
 					MaxHit:           dec.MaxNotionalHit,
 					CopySkipReason:   dec.SkipReason,
+					ExecutionLog:     execLog,
 				}
 				if err := at.store.Decision().LogDecision(rec); err != nil {
 					logger.Infof("⚠️ [%s] 写入跟单决策日志失败: %v", at.name, err)
@@ -1229,6 +1245,14 @@ func toFloat(v interface{}) float64 {
 		return float64(val)
 	}
 	return 0
+}
+
+// safeDiv 避免除零
+func safeDiv(a, b float64) float64 {
+	if b == 0 {
+		return 0
+	}
+	return a / b
 }
 
 // pickString 尽量返回字符串字段，若类型不匹配则尝试格式化输出。

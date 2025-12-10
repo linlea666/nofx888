@@ -160,6 +160,14 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		logger.Infof("copysync: skip %s %s due to follow switch off", ev.Symbol, ev.Action)
 		return
 	}
+	// 事件时效校验：超出窗口则丢弃，避免重放
+	if s.cfg.StaleEventWindowSec > 0 && !ev.Timestamp.IsZero() {
+		if time.Since(ev.Timestamp) > time.Duration(s.cfg.StaleEventWindowSec)*time.Second {
+			logger.Infof("copysync: skip %s %s stale_event window=%ds evTime=%s", ev.Symbol, ev.Action, s.cfg.StaleEventWindowSec, ev.Timestamp.Format(time.RFC3339))
+			s.logSkip(ev, "stale_event")
+			return
+		}
+	}
 	// 额外防重复：若跟随端已有同向仓位且事件为开/加仓，跳过；若存在反向仓位则先尝试平掉
 	if ev.Action == "open" || ev.Action == "add" {
 		if s.handleFollowerPositions(ev) {

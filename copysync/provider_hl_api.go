@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"sync"
@@ -286,13 +287,25 @@ func (p *HyperliquidAPIProvider) refreshClearinghouse(ctx context.Context) error
 		return err
 	}
 	defer resp.Body.Close()
-
-	var respWrap hlClearingResp
-	if err := json.NewDecoder(resp.Body).Decode(&respWrap); err != nil {
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return err
 	}
+
+	var respWrap hlClearingResp
+	_ = json.Unmarshal(bodyBytes, &respWrap)
+
+	// 如果返回没有 success 包装，尝试直接解析为数据体
+	if respWrap.Data == nil {
+		var direct hlClearingData
+		if err := json.Unmarshal(bodyBytes, &direct); err == nil && (direct.MarginSummary != nil || len(direct.AssetPositions) > 0) {
+			respWrap.Data = &direct
+			respWrap.Success = true
+		}
+	}
+
 	if !respWrap.Success || respWrap.Data == nil {
-		return fmt.Errorf("hl clearinghouseState not success")
+		return fmt.Errorf("hl clearinghouseState not success: %s", string(bodyBytes))
 	}
 
 	if respWrap.Data.MarginSummary != nil {

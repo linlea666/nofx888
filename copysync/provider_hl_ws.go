@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"nofx/logger"
 	"strconv"
@@ -31,6 +32,7 @@ type HyperliquidWSProvider struct {
 	equityMu      sync.RWMutex
 	leaderEquity  float64
 	marginModeMap map[string]string
+	leaderPos     map[string]*LeaderPosition
 	seenMu        sync.Mutex
 	seenTids      map[int64]struct{}
 }
@@ -51,6 +53,7 @@ func NewHyperliquidWSProvider(address string) Provider {
 		events:        make(chan ProviderEvent, 256),
 		httpClient:    &http.Client{Timeout: 10 * time.Second},
 		marginModeMap: make(map[string]string),
+		leaderPos:     make(map[string]*LeaderPosition),
 		seenTids:      make(map[int64]struct{}),
 	}
 }
@@ -90,11 +93,9 @@ func (p *HyperliquidWSProvider) Snapshot(ctx context.Context) (*LeaderState, err
 	positions := make(map[string]*LeaderPosition)
 	p.equityMu.RLock()
 	equity := p.leaderEquity
-	for coin, mode := range p.marginModeMap {
-		positions[coin+"_any"] = &LeaderPosition{
-			Symbol:     coin,
-			MarginMode: mode,
-		}
+	for key, pos := range p.leaderPos {
+		cp := *pos
+		positions[key] = &cp
 	}
 	p.equityMu.RUnlock()
 	return &LeaderState{
@@ -341,7 +342,8 @@ func (p *HyperliquidWSProvider) refreshClearinghouse(ctx context.Context) error 
 	}
 
 	equity, _ := strconv.ParseFloat(data.MarginSummary.AccountValue, 64)
-	modeMap := make(map[string]string)
+	modeMap := make(map[string]string, len(data.AssetPositions))
+	positions := make(map[string]*LeaderPosition)
 	for _, ap := range data.AssetPositions {
 		coin := strings.ToUpper(ap.Position.Coin)
 		mode := ap.Position.Leverage.Type
@@ -349,11 +351,35 @@ func (p *HyperliquidWSProvider) refreshClearinghouse(ctx context.Context) error 
 			mode = "cross"
 		}
 		modeMap[coin] = mode
+
+		szi, _ := strconv.ParseFloat(ap.Position.Szi, 64)
+		if math.Abs(szi) < 1e-12 {
+			continue
+		}
+		side := "long"
+		size := szi
+		if szi < 0 {
+			side = "short"
+			size = math.Abs(szi)
+		}
+		entry, _ := strconv.ParseFloat(ap.Position.EntryPx, 64)
+		marginUsed, _ := strconv.ParseFloat(ap.Position.MarginUsed, 64)
+		key := fmt.Sprintf("%s_%s", coin, side)
+		positions[key] = &LeaderPosition{
+			Symbol:     coin,
+			Side:       side,
+			Size:       size,
+			EntryPrice: entry,
+			MarginUsed: marginUsed,
+			Leverage:   ap.Position.Leverage.Value,
+			MarginMode: mode,
+		}
 	}
 
 	p.equityMu.Lock()
 	p.leaderEquity = equity
 	p.marginModeMap = modeMap
+	p.leaderPos = positions
 	p.equityMu.Unlock()
 	return nil
 }

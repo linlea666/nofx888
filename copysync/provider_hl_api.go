@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -25,6 +26,7 @@ type HyperliquidAPIProvider struct {
 	equityMu      sync.RWMutex
 	leaderEquity  float64
 	marginModeMap map[string]string // coin -> isolated/cross
+	leaderPos     map[string]*LeaderPosition
 }
 
 type hlFillResp struct {
@@ -84,6 +86,7 @@ func NewHyperliquidAPIProvider(address string) Provider {
 		events:        make(chan ProviderEvent, 256),
 		httpClient:    &http.Client{Timeout: 10 * time.Second},
 		marginModeMap: make(map[string]string),
+		leaderPos:     make(map[string]*LeaderPosition),
 	}
 }
 
@@ -153,12 +156,9 @@ func (p *HyperliquidAPIProvider) Snapshot(ctx context.Context) (*LeaderState, er
 		Positions: make(map[string]*LeaderPosition),
 		Timestamp: time.Now(),
 	}
-	for coin, mode := range p.marginModeMap {
-		state.Positions[coin+"_any"] = &LeaderPosition{
-			Symbol:     coin,
-			Side:       "", // 未区分多空，仅用于对账
-			MarginMode: mode,
-		}
+	for key, pos := range p.leaderPos {
+		cp := *pos
+		state.Positions[key] = &cp
 	}
 	return state, nil
 }
@@ -224,7 +224,7 @@ func (p *HyperliquidAPIProvider) fillToEvent(f hlFill) (ProviderEvent, bool) {
 
 	p.equityMu.RLock()
 	equity := p.leaderEquity
-	marginMode := p.marginModeMap[f.Coin]
+	marginMode := p.marginModeMap[strings.ToUpper(f.Coin)]
 	p.equityMu.RUnlock()
 
 	return ProviderEvent{
@@ -309,20 +309,52 @@ func (p *HyperliquidAPIProvider) refreshClearinghouse(ctx context.Context) error
 		return fmt.Errorf("hl clearinghouseState not success: %s", string(bodyBytes))
 	}
 
+	equity := p.leaderEquity
 	if respWrap.Data.MarginSummary != nil {
 		if val, err := strconv.ParseFloat(respWrap.Data.MarginSummary.AccountValue, 64); err == nil {
-			p.equityMu.Lock()
-			p.leaderEquity = val
-			p.equityMu.Unlock()
+			equity = val
 		}
 	}
-	modes := make(map[string]string)
-	for _, pos := range respWrap.Data.AssetPositions {
-		mode := pos.Position.Leverage.Type
-		modes[pos.Position.Coin] = mode
+
+	modeMap := make(map[string]string, len(respWrap.Data.AssetPositions))
+	positions := make(map[string]*LeaderPosition)
+	for _, ap := range respWrap.Data.AssetPositions {
+		coin := strings.ToUpper(ap.Position.Coin)
+		mode := ap.Position.Leverage.Type
+		if mode == "" {
+			mode = "cross"
+		}
+		modeMap[coin] = mode
+
+		szi, _ := strconv.ParseFloat(ap.Position.Szi, 64)
+		if math.Abs(szi) < 1e-12 {
+			continue
+		}
+		side := "long"
+		size := szi
+		if szi < 0 {
+			side = "short"
+			size = math.Abs(szi)
+		}
+		entry, _ := strconv.ParseFloat(ap.Position.EntryPx, 64)
+		marginUsed, _ := strconv.ParseFloat(ap.Position.MarginUsed, 64)
+
+		key := fmt.Sprintf("%s_%s", coin, side)
+		positions[key] = &LeaderPosition{
+			Symbol:     coin,
+			Side:       side,
+			Size:       size,
+			EntryPrice: entry,
+			MarginUsed: marginUsed,
+			Leverage:   ap.Position.Leverage.Value,
+			MarginMode: mode,
+		}
 	}
+
 	p.equityMu.Lock()
-	p.marginModeMap = modes
+	p.leaderEquity = equity
+	p.marginModeMap = modeMap
+	p.leaderPos = positions
 	p.equityMu.Unlock()
 	return nil
 }

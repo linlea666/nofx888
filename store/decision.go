@@ -4,7 +4,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
+
+	"nofx/logger"
 )
 
 // DecisionStore 决策日志存储
@@ -208,7 +212,34 @@ func (s *DecisionStore) LogDecision(record *DecisionRecord) error {
 	}
 	record.ID = decisionID
 
+	if err := s.writeDecisionLog(record); err != nil {
+		logger.Infof("⚠️ 保存决策日志文件失败: %v", err)
+	}
+
 	return nil
+}
+
+func (s *DecisionStore) writeDecisionLog(record *DecisionRecord) error {
+	if record == nil || record.TraderID == "" {
+		return fmt.Errorf("invalid decision record")
+	}
+	ts := record.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	tsStr := ts.Local().Format("20060102_150405")
+	dir := filepath.Join("decision_logs", record.TraderID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	filename := fmt.Sprintf("decision_%s_cycle%d.json", tsStr, record.CycleNumber)
+	path := filepath.Join(dir, filename)
+
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 // GetLatestRecords 获取指定交易员最近N条记录（按时间正序：从旧到新）

@@ -51,6 +51,8 @@ type Service struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	baseline *LeaderState
+
+	baselineIgnores map[string]bool
 }
 
 // NewService 创建 CopySync 服务。
@@ -58,19 +60,21 @@ func NewService(cfg CopyConfig, provider Provider, account FollowerAccount, exec
 	cfg.EnsureDefaults()
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{
-		cfg:       cfg,
-		provider:  provider,
-		account:   account,
-		executor:  executor,
-		priceFunc: priceFallback,
-		ctx:       ctx,
-		cancel:    cancel,
+		cfg:             cfg,
+		provider:        provider,
+		account:         account,
+		executor:        executor,
+		priceFunc:       priceFallback,
+		ctx:             ctx,
+		cancel:          cancel,
+		baselineIgnores: make(map[string]bool),
 	}
 }
 
 // SetBaseline 设置领航员基线快照（已有仓位不跟）。
 func (s *Service) SetBaseline(state *LeaderState) {
 	s.baseline = state
+	s.rebuildBaselineIgnores()
 }
 
 func (s *Service) logSkip(ev ProviderEvent, reason string) {
@@ -155,6 +159,12 @@ func (s *Service) loop() {
 
 // handleEvent 做比例换算与基础风控。
 func (s *Service) handleEvent(ev ProviderEvent) {
+	if s.ignoreDueToBaseline(ev) {
+		logger.Infof("copysync: skip %s %s because leader baseline position exists (symbol=%s side=%s)", ev.Symbol, ev.Action, ev.Symbol, ev.Side)
+		s.logSkip(ev, "baseline_position")
+		return
+	}
+
 	// 基本开关检查
 	if !s.shouldFollow(ev.Action) {
 		logger.Infof("copysync: skip %s %s due to follow switch off", ev.Symbol, ev.Action)
@@ -493,4 +503,42 @@ func (s *Service) handleFollowerPositions(ev ProviderEvent) bool {
 	}
 
 	return false
+}
+
+func (s *Service) rebuildBaselineIgnores() {
+	m := make(map[string]bool)
+	if s.baseline != nil && s.baseline.Positions != nil {
+		for key, pos := range s.baseline.Positions {
+			if pos == nil {
+				continue
+			}
+			if pos.Size > 0 && (pos.Side == "long" || pos.Side == "short") {
+				m[key] = true
+			}
+		}
+	}
+	s.baselineIgnores = m
+}
+
+func (s *Service) ignoreDueToBaseline(ev ProviderEvent) bool {
+	if len(s.baselineIgnores) == 0 {
+		return false
+	}
+	key := fmt.Sprintf("%s_%s", ev.Symbol, ev.Side)
+	if !s.baselineIgnores[key] {
+		return false
+	}
+	switch ev.Action {
+	case "add", "reduce":
+		return true
+	case "close":
+		delete(s.baselineIgnores, key)
+		return true
+	case "open":
+		// 领航员重新开新仓，释放基线约束
+		delete(s.baselineIgnores, key)
+		return false
+	default:
+		return true
+	}
 }

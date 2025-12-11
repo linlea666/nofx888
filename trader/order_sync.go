@@ -414,7 +414,8 @@ func (m *OrderSyncManager) createTrader(config *store.TraderFullConfig) (Trader,
 		return NewOKXTrader(exchange.APIKey, exchange.SecretKey, exchange.Passphrase), nil
 
 	case "hyperliquid":
-		return NewHyperliquidTrader(exchange.SecretKey, exchange.HyperliquidWalletAddr, exchange.Testnet)
+		// Hyperliquid 的代理私钥存放在 APIKey 字段（保持与 AutoTrader 加载一致）
+		return NewHyperliquidTrader(exchange.APIKey, exchange.HyperliquidWalletAddr, exchange.Testnet)
 
 	case "aster":
 		return NewAsterTrader(exchange.AsterUser, exchange.AsterSigner, exchange.AsterPrivateKey)

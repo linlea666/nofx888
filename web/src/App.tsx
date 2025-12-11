@@ -16,6 +16,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ConfirmDialogProvider } from './components/ConfirmDialog'
 import { t, type Language } from './i18n/translations'
 import { confirmToast, notify } from './lib/notify'
+import { formatCurrency, formatPrice, formatQuantity } from './lib/formatters'
 import { useSystemConfig } from './hooks/useSystemConfig'
 import { DecisionCard } from './components/DecisionCard'
 import { BacktestPage } from './components/BacktestPage'
@@ -888,6 +889,9 @@ function TraderDetailsPage({
                         {t('positionValue', language)}
                       </th>
                       <th className="pb-3 font-semibold text-gray-400">
+                        {t('margin', language)}
+                      </th>
+                      <th className="pb-3 font-semibold text-gray-400">
                         {t('leverage', language)}
                       </th>
                       <th className="pb-3 font-semibold text-gray-400">
@@ -949,29 +953,20 @@ function TraderDetailsPage({
                             {language === 'zh' ? '平仓' : 'Close'}
                           </button>
                         </td>
-                        <td
-                          className="py-3 font-mono"
-                          style={{ color: '#EAECEF' }}
-                        >
-                          {pos.entry_price.toFixed(4)}
+                        <td className="py-3 font-mono" style={{ color: '#EAECEF' }}>
+                          {formatPrice(pos.entry_price)}
                         </td>
-                        <td
-                          className="py-3 font-mono"
-                          style={{ color: '#EAECEF' }}
-                        >
-                          {pos.mark_price.toFixed(4)}
+                        <td className="py-3 font-mono" style={{ color: '#EAECEF' }}>
+                          {formatPrice(pos.mark_price)}
                         </td>
-                        <td
-                          className="py-3 font-mono"
-                          style={{ color: '#EAECEF' }}
-                        >
-                          {pos.quantity.toFixed(4)}
+                        <td className="py-3 font-mono" style={{ color: '#EAECEF' }}>
+                          {formatQuantity(pos.quantity)}
                         </td>
-                        <td
-                          className="py-3 font-mono font-bold"
-                          style={{ color: '#EAECEF' }}
-                        >
-                          {(pos.quantity * pos.mark_price).toFixed(2)} USDT
+                        <td className="py-3 font-mono font-bold" style={{ color: '#EAECEF' }}>
+                          {formatCurrency(pos.quantity * pos.mark_price)}
+                        </td>
+                        <td className="py-3 font-mono font-bold" style={{ color: '#EAECEF' }}>
+                          {formatCurrency(pos.margin_used)}
                         </td>
                         <td
                           className="py-3 font-mono"
@@ -992,11 +987,8 @@ function TraderDetailsPage({
                             {pos.unrealized_pnl_pct.toFixed(2)}%)
                           </span>
                         </td>
-                        <td
-                          className="py-3 font-mono"
-                          style={{ color: '#848E9C' }}
-                        >
-                          {pos.liquidation_price.toFixed(4)}
+                        <td className="py-3 font-mono" style={{ color: '#848E9C' }}>
+                          {formatPrice(pos.liquidation_price)}
                         </td>
                       </tr>
                     ))}

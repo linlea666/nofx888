@@ -103,12 +103,7 @@ func (s *Service) Start() error {
 	}
 	// 基线快照（用于过滤已有仓位）仅在可用时加载一次，失败则重试几次
 	if snap, err := s.provider.Snapshot(s.ctx); err == nil {
-		if s.baseline == nil {
-			s.baseline = snap
-		} else {
-			// 更新基线时间戳，避免使用过旧数据
-			s.baseline.Timestamp = snap.Timestamp
-		}
+		s.SetBaseline(snap)
 	} else {
 		logger.Warnf("copysync: snapshot failed on start: %v, will retry", err)
 		go s.retrySnapshot()

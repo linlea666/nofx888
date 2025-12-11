@@ -52,7 +52,9 @@ type Service struct {
 	wg       sync.WaitGroup
 	baseline *LeaderState
 
-	baselineIgnores map[string]bool
+	baselineIgnores  map[string]bool
+	trackedPositions map[string]bool
+	baselineInitOnce bool
 }
 
 // NewService 创建 CopySync 服务。
@@ -60,21 +62,28 @@ func NewService(cfg CopyConfig, provider Provider, account FollowerAccount, exec
 	cfg.EnsureDefaults()
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{
-		cfg:             cfg,
-		provider:        provider,
-		account:         account,
-		executor:        executor,
-		priceFunc:       priceFallback,
-		ctx:             ctx,
-		cancel:          cancel,
-		baselineIgnores: make(map[string]bool),
+		cfg:              cfg,
+		provider:         provider,
+		account:          account,
+		executor:         executor,
+		priceFunc:        priceFallback,
+		ctx:              ctx,
+		cancel:           cancel,
+		baselineIgnores:  make(map[string]bool),
+		trackedPositions: make(map[string]bool),
 	}
 }
 
 // SetBaseline 设置领航员基线快照（已有仓位不跟）。
 func (s *Service) SetBaseline(state *LeaderState) {
+	if state == nil {
+		return
+	}
 	s.baseline = state
-	s.rebuildBaselineIgnores()
+	if !s.baselineInitOnce {
+		s.rebuildBaselineIgnores()
+		s.baselineInitOnce = true
+	}
 }
 
 func (s *Service) logSkip(ev ProviderEvent, reason string) {
@@ -293,6 +302,9 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		return
 	}
 	logger.Infof("copysync: %s %s 跟单完成 | %s | provider=%s trace=%s", ev.Symbol, ev.Action, decision.Formula, ev.ProviderType, ev.TraceID)
+	if err := s.afterExecution(ev, decision); err != nil {
+		logger.Infof("copysync: post execution hook %s %s err=%v", ev.Symbol, ev.Action, err)
+	}
 	if s.loggerCb != nil {
 		s.loggerCb(decision)
 	}
@@ -530,10 +542,26 @@ func (s *Service) ignoreDueToBaseline(ev ProviderEvent) bool {
 		delete(s.baselineIgnores, key)
 		return true
 	case "open":
-		// 领航员重新开新仓，释放基线约束
-		delete(s.baselineIgnores, key)
+		// 允许 open 进入执行流程，成功后再移出黑名单
 		return false
 	default:
 		return true
 	}
+}
+
+func (s *Service) markTracked(symbol, side string) {
+	key := fmt.Sprintf("%s_%s", symbol, side)
+	delete(s.baselineIgnores, key)
+	s.trackedPositions[key] = true
+}
+
+func (s *Service) afterExecution(ev ProviderEvent, dec *CopyDecision) error {
+	if dec != nil && dec.Skipped {
+		return nil
+	}
+	switch ev.Action {
+	case "open", "add":
+		s.markTracked(ev.Symbol, ev.Side)
+	}
+	return nil
 }

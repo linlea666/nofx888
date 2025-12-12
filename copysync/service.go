@@ -562,6 +562,9 @@ func (s *Service) afterExecution(ev ProviderEvent, dec *CopyDecision) error {
 	switch ev.Action {
 	case "open", "add":
 		s.markTracked(ev.Symbol, ev.Side)
+	case "close":
+		key := fmt.Sprintf("%s_%s", ev.Symbol, ev.Side)
+		delete(s.trackedPositions, key)
 	}
 	return nil
 }

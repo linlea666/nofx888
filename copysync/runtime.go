@@ -2,14 +2,16 @@ package copysync
 
 import (
 	"fmt"
+	"nofx/logger"
 	"nofx/market"
 	"nofx/store"
 	"strconv"
+	"strings"
 )
 
 // NewServiceForTrader 根据 CopyConfig 与 provider 选择创建 CopySync Service。
 // followerTrader：跟随账户的交易适配器；用于取净值与下单。
-func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID string, orderLogger func(o *store.TraderOrder, dec *CopyDecision, execErr error), st *store.Store) (*Service, error) {
+func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID string, orderLogger func(o *store.TraderOrder, dec *CopyDecision, execErr error), st *store.Store, followerExchange string) (*Service, error) {
 	cfg.EnsureDefaults()
 
 	// 创建 provider
@@ -94,7 +96,8 @@ func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID 
 	if st != nil {
 		tracker = st.CopyTracker()
 	}
-	service := NewService(cfg, provider, account, exec, priceFunc, tracker, traderID)
+	strategy := selectStrategy(cfg.ProviderType, followerExchange)
+	service := NewService(cfg, provider, account, exec, priceFunc, tracker, traderID, strategy)
 	// 读取持久化游标
 	if cfg.ProviderParams != nil {
 		if lastSeqStr, ok := cfg.ProviderParams["last_seq"]; ok {
@@ -112,4 +115,16 @@ func (s *Service) Snapshot() (*LeaderState, error) {
 		return nil, fmt.Errorf("provider nil")
 	}
 	return s.provider.Snapshot(s.ctx)
+}
+
+func selectStrategy(providerType, followerExchange string) CopyStrategy {
+	pt := strings.ToLower(providerType)
+	ex := strings.ToLower(followerExchange)
+	if strings.Contains(pt, "hyperliquid") {
+		if ex != "" && ex != "hyperliquid" {
+			logger.Warnf("copysync: provider=%s is single-sided but follower exchange=%s", providerType, followerExchange)
+		}
+		return SingleSidedStrategy{}
+	}
+	return DualSidedStrategy{}
 }

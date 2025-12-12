@@ -65,12 +65,16 @@ type Service struct {
 	baselineInitOnce bool
 	trackerStore     TrackedPositionStore
 	traderID         string
+	strategy         CopyStrategy
 }
 
 // NewService 创建 CopySync 服务。
-func NewService(cfg CopyConfig, provider Provider, account FollowerAccount, executor ExecutionAdapter, priceFallback func(symbol string) (float64, string, error), tracker TrackedPositionStore, traderID string) *Service {
+func NewService(cfg CopyConfig, provider Provider, account FollowerAccount, executor ExecutionAdapter, priceFallback func(symbol string) (float64, string, error), tracker TrackedPositionStore, traderID string, strategy CopyStrategy) *Service {
 	cfg.EnsureDefaults()
 	ctx, cancel := context.WithCancel(context.Background())
+	if strategy == nil {
+		strategy = DualSidedStrategy{}
+	}
 	return &Service{
 		cfg:              cfg,
 		provider:         provider,
@@ -83,6 +87,7 @@ func NewService(cfg CopyConfig, provider Provider, account FollowerAccount, exec
 		trackedPositions: make(map[string]bool),
 		trackerStore:     tracker,
 		traderID:         traderID,
+		strategy:         strategy,
 	}
 }
 
@@ -152,7 +157,7 @@ func (s *Service) restoreTrackedPositions() {
 		return
 	}
 	for _, rec := range records {
-		key := fmt.Sprintf("%s_%s", rec.Symbol, rec.Side)
+		key := symbolSideKey(rec.Symbol, rec.Side)
 		s.trackedPositions[key] = true
 	}
 	// 清理已经不存在的仓位，保持状态准确
@@ -220,9 +225,11 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 			return
 		}
 	}
-	// 额外防重复：若跟随端已有同向仓位且事件为开/加仓，跳过；若存在反向仓位则先尝试平掉
-	if ev.Action == "open" || ev.Action == "add" {
-		if s.handleFollowerPositions(ev) {
+	if s.strategy != nil {
+		if skip, reason := s.strategy.BeforeEvent(s, ev); skip {
+			if reason != "" {
+				s.logSkip(ev, reason)
+			}
 			return
 		}
 	}
@@ -494,84 +501,6 @@ func (s *Service) reconcileFollowerPositions() {
 
 // handleFollowerPositions 在开/加仓前检查跟随端持仓，处理同向/反向残留。
 // 返回 true 表示已处理并需跳过本次事件。
-func (s *Service) handleFollowerPositions(ev ProviderEvent) bool {
-	te, ok := s.executor.(*TraderExecutor)
-	if !ok || te == nil || te.Trader == nil {
-		return false
-	}
-	positions, err := te.Trader.GetPositions()
-	if err != nil {
-		return false
-	}
-	opposites := []struct {
-		side string
-		size float64
-	}{}
-	hasSame := false
-	sameSize := 0.0
-	for _, p := range positions {
-		ps, size, isLong, err := parsePosition(p)
-		if err != nil {
-			logger.Warnf("copysync: handleFollowerPositions skip invalid position: %v", err)
-			continue
-		}
-		if ps != ev.Symbol || size <= 0 {
-			continue
-		}
-		if (ev.Side == "long" && isLong) || (ev.Side == "short" && !isLong) {
-			hasSame = true
-			sameSize += size
-		} else {
-			side := "short"
-			if isLong {
-				side = "long"
-			}
-			opposites = append(opposites, struct {
-				side string
-				size float64
-			}{side: side, size: size})
-		}
-	}
-
-	// 先处理反向仓位：尝试强制平掉
-	for _, o := range opposites {
-		if err := te.close(nil, o.side, ev.Symbol, o.size); err != nil {
-			logger.Infof("copysync: skip %s %s due to opposite position close failed: %v", ev.Symbol, ev.Action, err)
-			s.logSkip(ev, "insufficient_position")
-			return true
-		}
-		s.clearTracked(ev.Symbol, o.side)
-	}
-
-	// 同向仓位存在时，根据基线判断是否残留；若基线无持仓则先对账平掉后继续本次事件。
-	if hasSame {
-		baseSize := 0.0
-		if s.baseline != nil && s.baseline.Positions != nil {
-			key := fmt.Sprintf("%s_%s", ev.Symbol, ev.Side)
-			if bp := s.baseline.Positions[key]; bp != nil {
-				baseSize = bp.Size
-			}
-		}
-		if baseSize <= 0 {
-			logger.Warnf("copysync: trim residual same-side position before %s %s size=%.4f", ev.Symbol, ev.Action, sameSize)
-			if err := te.close(nil, ev.Side, ev.Symbol, sameSize); err != nil {
-				s.logSkip(ev, "residual_position_not_cleared")
-				return true
-			}
-			s.clearTracked(ev.Symbol, ev.Side)
-			return false
-		}
-
-		logger.Infof("copysync: follower has same-side position for %s, continue %s", ev.Symbol, ev.Action)
-		if ev.Action == "open" {
-			s.logSkip(ev, "same_side_exists")
-			return true
-		}
-	}
-
-	return false
-}
-
 func (s *Service) rebuildBaselineIgnores() {
 	m := make(map[string]bool)
 	if s.baseline != nil && s.baseline.Positions != nil {
@@ -591,7 +520,7 @@ func (s *Service) ignoreDueToBaseline(ev ProviderEvent) bool {
 	if len(s.baselineIgnores) == 0 {
 		return false
 	}
-	key := fmt.Sprintf("%s_%s", ev.Symbol, ev.Side)
+	key := symbolSideKey(ev.Symbol, ev.Side)
 	if s.trackedPositions[key] {
 		return false
 	}
@@ -613,7 +542,7 @@ func (s *Service) ignoreDueToBaseline(ev ProviderEvent) bool {
 }
 
 func (s *Service) markTracked(symbol, side string) {
-	key := fmt.Sprintf("%s_%s", symbol, side)
+	key := symbolSideKey(symbol, side)
 	delete(s.baselineIgnores, key)
 	s.trackedPositions[key] = true
 	if s.trackerStore != nil && s.traderID != "" {
@@ -624,7 +553,7 @@ func (s *Service) markTracked(symbol, side string) {
 }
 
 func (s *Service) clearTracked(symbol, side string) {
-	key := fmt.Sprintf("%s_%s", symbol, side)
+	key := symbolSideKey(symbol, side)
 	delete(s.trackedPositions, key)
 	delete(s.baselineIgnores, key)
 	if s.trackerStore != nil && s.traderID != "" {
@@ -657,4 +586,8 @@ func splitSymbolSide(key string) (string, string) {
 		return key, ""
 	}
 	return key[:idx], key[idx+1:]
+}
+
+func symbolSideKey(symbol, side string) string {
+	return fmt.Sprintf("%s_%s", symbol, side)
 }

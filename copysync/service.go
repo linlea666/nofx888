@@ -11,10 +11,12 @@ import (
 	"time"
 )
 
+const positionEpsilon = 1e-9
+
 // TrackedPositionStore 持久化跟踪状态以支持重启恢复。
 type TrackedPositionStore interface {
 	List(traderID string) ([]store.CopyTrackedPosition, error)
-	Upsert(traderID, symbol, side string) error
+	Upsert(traderID, symbol, side string, followerSize float64) error
 	Delete(traderID, symbol, side string) error
 }
 
@@ -61,7 +63,7 @@ type Service struct {
 	baseline *LeaderState
 
 	baselineIgnores  map[string]bool
-	trackedPositions map[string]bool
+	trackedPositions map[string]float64
 	baselineInitOnce bool
 	trackerStore     TrackedPositionStore
 	traderID         string
@@ -84,7 +86,7 @@ func NewService(cfg CopyConfig, provider Provider, account FollowerAccount, exec
 		ctx:              ctx,
 		cancel:           cancel,
 		baselineIgnores:  make(map[string]bool),
-		trackedPositions: make(map[string]bool),
+		trackedPositions: make(map[string]float64),
 		trackerStore:     tracker,
 		traderID:         traderID,
 		strategy:         strategy,
@@ -157,17 +159,24 @@ func (s *Service) restoreTrackedPositions() {
 		return
 	}
 	for _, rec := range records {
-		key := symbolSideKey(rec.Symbol, rec.Side)
-		s.trackedPositions[key] = true
+		if rec.Symbol == "" || rec.Side == "" {
+			continue
+		}
+		s.setTrackedInternal(rec.Symbol, rec.Side, rec.FollowerSize, false)
 	}
 	// 清理已经不存在的仓位，保持状态准确
 	for key := range s.trackedPositions {
 		sym, side := splitSymbolSide(key)
 		if sym == "" || side == "" {
+			delete(s.trackedPositions, key)
 			continue
 		}
-		if has, err := s.exchangeHasPosition(sym, side); err == nil && !has {
-			s.clearTracked(sym, side)
+		if size, err := s.currentFollowerPositionSize(sym, side); err == nil {
+			if size <= positionEpsilon {
+				s.clearTracked(sym, side)
+			} else {
+				s.setTrackedInternal(sym, side, size, false)
+			}
 		}
 	}
 }
@@ -411,46 +420,36 @@ func (s *Service) refreshBaselineLoop() {
 }
 
 // followerHasPosition 简单查询跟随端是否已有同向仓位（用于防重复开仓）。
-func (s *Service) exchangeHasPosition(symbol, side string) (bool, error) {
+func (s *Service) currentFollowerPositionSize(symbol, side string) (float64, error) {
 	te, ok := s.executor.(*TraderExecutor)
 	if !ok || te == nil || te.Trader == nil {
-		return false, fmt.Errorf("no trader executor")
+		return 0, fmt.Errorf("no trader executor")
 	}
 	positions, err := te.Trader.GetPositions()
 	if err != nil {
-		return false, err
+		return 0, err
 	}
+	total := 0.0
 	for _, p := range positions {
 		ps, size, isLong, err := parsePosition(p)
 		if err != nil {
-			logger.Infof("copysync: ignore position parse error for exchangeHasPosition %v", err)
+			logger.Infof("copysync: ignore position parse error for follower position %v", err)
 			continue
 		}
 		if ps == symbol && size > 0 {
 			if (side == "long" && isLong) || (side == "short" && !isLong) {
-				return true, nil
+				total += size
 			}
 		}
 	}
-	return false, nil
+	return total, nil
 }
 
 func (s *Service) followerHasPosition(symbol, side string) bool {
-	te, ok := s.executor.(*TraderExecutor)
-	if !ok || te == nil || te.Trader == nil {
-		key := fmt.Sprintf("%s_%s", symbol, side)
-		return s.trackedPositions[key]
+	if size, err := s.currentFollowerPositionSize(symbol, side); err == nil {
+		return size > positionEpsilon
 	}
-	has, err := s.exchangeHasPosition(symbol, side)
-	if err != nil {
-		key := fmt.Sprintf("%s_%s", symbol, side)
-		return s.trackedPositions[key]
-	}
-	if !has {
-		key := fmt.Sprintf("%s_%s", symbol, side)
-		return s.trackedPositions[key]
-	}
-	return true
+	return s.trackedPositions[symbolSideKey(symbol, side)] > positionEpsilon
 }
 
 // reconcileFollowerPositions 对比基线和跟随端持仓，必要时强制平掉残留/反向仓。
@@ -521,7 +520,7 @@ func (s *Service) ignoreDueToBaseline(ev ProviderEvent) bool {
 		return false
 	}
 	key := symbolSideKey(ev.Symbol, ev.Side)
-	if s.trackedPositions[key] {
+	if s.trackedPositions[key] > positionEpsilon {
 		return false
 	}
 	if !s.baselineIgnores[key] {
@@ -541,17 +540,6 @@ func (s *Service) ignoreDueToBaseline(ev ProviderEvent) bool {
 	}
 }
 
-func (s *Service) markTracked(symbol, side string) {
-	key := symbolSideKey(symbol, side)
-	delete(s.baselineIgnores, key)
-	s.trackedPositions[key] = true
-	if s.trackerStore != nil && s.traderID != "" {
-		if err := s.trackerStore.Upsert(s.traderID, symbol, side); err != nil {
-			logger.Warnf("copysync: persist tracked position failed %s %s: %v", symbol, side, err)
-		}
-	}
-}
-
 func (s *Service) clearTracked(symbol, side string) {
 	key := symbolSideKey(symbol, side)
 	delete(s.trackedPositions, key)
@@ -568,16 +556,63 @@ func (s *Service) afterExecution(ev ProviderEvent, dec *CopyDecision) error {
 		return nil
 	}
 	switch ev.Action {
-	case "open", "add":
-		s.markTracked(ev.Symbol, ev.Side)
-	case "reduce":
-		if has, err := s.exchangeHasPosition(ev.Symbol, ev.Side); err == nil && !has {
-			s.clearTracked(ev.Symbol, ev.Side)
-		}
+	case "open", "add", "reduce":
+		s.refreshTrackedState(ev, dec)
 	case "close":
 		s.clearTracked(ev.Symbol, ev.Side)
 	}
 	return nil
+}
+
+func (s *Service) trackedSize(symbol, side string) float64 {
+	if symbol == "" || side == "" {
+		return 0
+	}
+	return s.trackedPositions[symbolSideKey(symbol, side)]
+}
+
+func (s *Service) setTracked(symbol, side string, size float64) {
+	s.setTrackedInternal(symbol, side, size, true)
+}
+
+func (s *Service) setTrackedInternal(symbol, side string, size float64, persist bool) {
+	if size <= positionEpsilon {
+		s.clearTracked(symbol, side)
+		return
+	}
+	key := symbolSideKey(symbol, side)
+	delete(s.baselineIgnores, key)
+	s.trackedPositions[key] = size
+	if persist && s.trackerStore != nil && s.traderID != "" {
+		if err := s.trackerStore.Upsert(s.traderID, symbol, side, size); err != nil {
+			logger.Warnf("copysync: persist tracked position failed %s %s: %v", symbol, side, err)
+		}
+	}
+}
+
+func (s *Service) refreshTrackedState(ev ProviderEvent, dec *CopyDecision) {
+	size, err := s.currentFollowerPositionSize(ev.Symbol, ev.Side)
+	if err != nil {
+		prev := s.trackedSize(ev.Symbol, ev.Side)
+		qty := 0.0
+		if dec != nil {
+			qty = dec.FollowerQty
+		}
+		switch ev.Action {
+		case "open", "add":
+			size = prev + qty
+		case "reduce":
+			size = math.Max(prev-qty, 0)
+		default:
+			size = prev
+		}
+		logger.Warnf("copysync: follower position query failed %s %s: %v (fallback=%.6f)", ev.Symbol, ev.Side, err, size)
+	}
+	if size <= positionEpsilon {
+		s.clearTracked(ev.Symbol, ev.Side)
+		return
+	}
+	s.setTracked(ev.Symbol, ev.Side, size)
 }
 
 func splitSymbolSide(key string) (string, string) {

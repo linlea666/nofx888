@@ -9,7 +9,7 @@ import (
 
 // NewServiceForTrader 根据 CopyConfig 与 provider 选择创建 CopySync Service。
 // followerTrader：跟随账户的交易适配器；用于取净值与下单。
-func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID string, orderLogger func(o *store.TraderOrder, dec *CopyDecision, execErr error)) (*Service, error) {
+func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID string, orderLogger func(o *store.TraderOrder, dec *CopyDecision, execErr error), st *store.Store) (*Service, error) {
 	cfg.EnsureDefaults()
 
 	// 创建 provider
@@ -90,7 +90,11 @@ func NewServiceForTrader(cfg CopyConfig, followerTrader TraderAdapter, traderID 
 		return 0, "", fmt.Errorf("price_fallback_failed")
 	}
 
-	service := NewService(cfg, provider, account, exec, priceFunc)
+	var tracker TrackedPositionStore
+	if st != nil {
+		tracker = st.CopyTracker()
+	}
+	service := NewService(cfg, provider, account, exec, priceFunc, tracker, traderID)
 	// 读取持久化游标
 	if cfg.ProviderParams != nil {
 		if lastSeqStr, ok := cfg.ProviderParams["last_seq"]; ok {

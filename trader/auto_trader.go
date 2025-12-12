@@ -363,7 +363,7 @@ func (at *AutoTrader) Run() error {
 			}
 		}
 
-		service, err := copysync.NewServiceForTrader(*at.config.CopyConfig, at.trader, at.id, orderLogger)
+		service, err := copysync.NewServiceForTrader(*at.config.CopyConfig, at.trader, at.id, orderLogger, at.store)
 		if err != nil {
 			logger.Infof("❌ [%s] 启动跟单服务失败: %v", at.name, err)
 		} else {

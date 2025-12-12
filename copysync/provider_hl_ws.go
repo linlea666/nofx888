@@ -112,7 +112,8 @@ func (p *HyperliquidWSProvider) GetCursor() int64  { return p.cursor }
 func (p *HyperliquidWSProvider) SetCursor(v int64) { p.cursor = v }
 
 func (p *HyperliquidWSProvider) run(ctx context.Context) {
-	backoffs := []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
+	connectBackoff := []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
+	readBackoff := []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
 	attempt := 0
 	// 启动前先拉一次净值/模式
 	_ = p.refreshClearinghouse(ctx)
@@ -132,11 +133,12 @@ func (p *HyperliquidWSProvider) run(ctx context.Context) {
 		}
 	}()
 	for {
+		delay := 1 * time.Second
 		if err := p.connectAndSubscribe(); err != nil {
-			if attempt >= len(backoffs) {
-				attempt = len(backoffs) - 1
+			if attempt >= len(connectBackoff) {
+				attempt = len(connectBackoff) - 1
 			}
-			delay := backoffs[attempt]
+			delay := connectBackoff[attempt]
 			logger.Infof("HL WS connect failed: %v, retry in %s", err, delay)
 			select {
 			case <-ctx.Done():
@@ -155,14 +157,28 @@ func (p *HyperliquidWSProvider) run(ctx context.Context) {
 				since = now.Sub(p.lastReadErrAt).Seconds()
 			}
 			p.lastReadErrAt = now
-			logger.Warnf("HL WS read error #%d (%.1fs since last): %T %v , reconnecting...", p.readFailures, since, err, err)
+			localAddr := "<nil>"
+			remoteAddr := "<nil>"
+			if p.conn != nil {
+				localAddr = p.conn.LocalAddr().String()
+				remoteAddr = p.conn.RemoteAddr().String()
+				_ = p.conn.Close()
+				p.conn = nil
+			}
+			delayIdx := p.readFailures - 1
+			if delayIdx >= len(readBackoff) {
+				delayIdx = len(readBackoff) - 1
+			}
+			delay = readBackoff[delayIdx]
+			logger.Warnf("HL WS read error #%d (%.1fs since last): %T %v | local=%s remote=%s | reconnect in %s", p.readFailures, since, err, err, localAddr, remoteAddr, delay)
+		} else {
+			return
 		}
 		select {
 		case <-ctx.Done():
 			return
-		default:
+		case <-time.After(delay):
 		}
-		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -192,13 +208,13 @@ func (p *HyperliquidWSProvider) connectAndSubscribe() error {
 }
 
 func (p *HyperliquidWSProvider) readLoop(ctx context.Context) error {
-	pingTicker := time.NewTicker(10 * time.Second)
+	pingTicker := time.NewTicker(5 * time.Second)
 	defer pingTicker.Stop()
 
 	p.conn.SetReadLimit(1 << 20)
-	p.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	p.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	p.conn.SetPongHandler(func(appData string) error {
-		p.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		p.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		return nil
 	})
 
@@ -217,7 +233,7 @@ func (p *HyperliquidWSProvider) readLoop(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		p.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		p.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		p.handleMessage(msg)
 	}
 }

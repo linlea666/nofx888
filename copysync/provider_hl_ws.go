@@ -35,6 +35,9 @@ type HyperliquidWSProvider struct {
 	leaderPos     map[string]*LeaderPosition
 	seenMu        sync.Mutex
 	seenTids      map[int64]struct{}
+
+	readFailures  int
+	lastReadErrAt time.Time
 }
 
 type hlWSMessage struct {
@@ -145,7 +148,14 @@ func (p *HyperliquidWSProvider) run(ctx context.Context) {
 		}
 		attempt = 0
 		if err := p.readLoop(ctx); err != nil {
-			logger.Infof("HL WS read error: %v, reconnecting...", err)
+			p.readFailures++
+			now := time.Now()
+			var since float64
+			if !p.lastReadErrAt.IsZero() {
+				since = now.Sub(p.lastReadErrAt).Seconds()
+			}
+			p.lastReadErrAt = now
+			logger.Warnf("HL WS read error #%d (%.1fs since last): %T %v , reconnecting...", p.readFailures, since, err, err)
 		}
 		select {
 		case <-ctx.Done():
@@ -163,6 +173,9 @@ func (p *HyperliquidWSProvider) connectAndSubscribe() error {
 		return err
 	}
 	p.conn = c
+	if p.conn != nil {
+		logger.Infof("HL WS connected local=%s remote=%s", p.conn.LocalAddr(), p.conn.RemoteAddr())
+	}
 	addr := strings.ToLower(p.address)
 	subMsg := map[string]interface{}{
 		"method": "subscribe",
@@ -179,7 +192,7 @@ func (p *HyperliquidWSProvider) connectAndSubscribe() error {
 }
 
 func (p *HyperliquidWSProvider) readLoop(ctx context.Context) error {
-	pingTicker := time.NewTicker(20 * time.Second)
+	pingTicker := time.NewTicker(10 * time.Second)
 	defer pingTicker.Stop()
 
 	p.conn.SetReadLimit(1 << 20)
@@ -210,6 +223,8 @@ func (p *HyperliquidWSProvider) readLoop(ctx context.Context) error {
 }
 
 func (p *HyperliquidWSProvider) handleMessage(msg []byte) {
+	p.readFailures = 0
+	p.lastReadErrAt = time.Time{}
 	var envelope hlWSMessage
 	if err := json.Unmarshal(msg, &envelope); err != nil {
 		logger.Infof("HL WS unmarshal failed: %v body=%s", err, string(msg))

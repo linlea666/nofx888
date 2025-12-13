@@ -114,7 +114,7 @@ func (s *Service) normalizeLeaderState(state *LeaderState) *LeaderState {
 		return state
 	}
 	norm := make(map[string]*LeaderPosition, len(state.Positions))
-	for key, pos := range state.Positions {
+	for _, pos := range state.Positions {
 		if pos == nil {
 			continue
 		}

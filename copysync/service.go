@@ -238,17 +238,19 @@ func (s *Service) loop() {
 
 // handleEvent 做比例换算与基础风控。
 func (s *Service) handleEvent(ev ProviderEvent) {
-	if s.ignoreDueToBaseline(ev) {
-		logger.Infof("copysync: skip %s %s because leader baseline position exists (symbol=%s side=%s)", ev.Symbol, ev.Action, ev.Symbol, ev.Side)
-		s.logSkip(ev, "baseline_position")
-		return
-	}
-
 	// 基本开关检查
 	if !s.shouldFollow(ev.Action) {
 		logger.Infof("copysync: skip %s %s due to follow switch off", ev.Symbol, ev.Action)
 		return
 	}
+
+	// 基线处理：初始仓位的首次 open/add 直接跳过并清理黑名单
+	if (ev.Action == "open" || ev.Action == "add") && s.consumeBaseline(ev.Symbol, ev.Side) {
+		logger.Infof("copysync: skip %s %s because leader baseline position exists (symbol=%s side=%s)", ev.Symbol, ev.Action, ev.Symbol, ev.Side)
+		s.logSkip(ev, "baseline_position")
+		return
+	}
+
 	// 事件时效校验：超出窗口则丢弃，避免重放
 	if s.cfg.StaleEventWindowSec > 0 && !ev.Timestamp.IsZero() {
 		if time.Since(ev.Timestamp) > time.Duration(s.cfg.StaleEventWindowSec)*time.Second {
@@ -266,10 +268,17 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		}
 	}
 	// 如果是 reduce/close 但跟随端无仓位，则跳过，避免 reduce-only 报错
-	if (ev.Action == "reduce" || ev.Action == "close") && !s.followerHasPosition(ev.Symbol, ev.Side) {
-		logger.Infof("copysync: skip %s %s follower has no position", ev.Symbol, ev.Action)
-		s.logSkip(ev, "follower_position_missing")
-		return
+	if ev.Action == "reduce" || ev.Action == "close" {
+		if !s.followerHasPosition(ev.Symbol, ev.Side) {
+			if s.consumeBaseline(ev.Symbol, ev.Side) {
+				logger.Infof("copysync: skip %s %s because leader baseline position exists (symbol=%s side=%s)", ev.Symbol, ev.Action, ev.Symbol, ev.Side)
+				s.logSkip(ev, "baseline_position")
+				return
+			}
+			logger.Infof("copysync: skip %s %s follower has no position", ev.Symbol, ev.Action)
+			s.logSkip(ev, "follower_position_missing")
+			return
+		}
 	}
 
 	price := ev.Price
@@ -539,29 +548,24 @@ func (s *Service) rebuildBaselineIgnores() {
 	s.baselineIgnores = m
 }
 
-func (s *Service) ignoreDueToBaseline(ev ProviderEvent) bool {
+func (s *Service) hasBaseline(symbol, side string) bool {
 	if len(s.baselineIgnores) == 0 {
 		return false
 	}
-	key := symbolSideKey(ev.Symbol, ev.Side)
+	key := symbolSideKey(symbol, side)
 	if s.trackedPositions[key] > positionEpsilon {
 		return false
 	}
-	if !s.baselineIgnores[key] {
+	return s.baselineIgnores[key]
+}
+
+func (s *Service) consumeBaseline(symbol, side string) bool {
+	if !s.hasBaseline(symbol, side) {
 		return false
 	}
-	switch ev.Action {
-	case "add", "reduce":
-		return true
-	case "close":
-		delete(s.baselineIgnores, key)
-		return true
-	case "open":
-		// 允许 open 进入执行流程，成功后再移出黑名单
-		return false
-	default:
-		return true
-	}
+	key := symbolSideKey(symbol, side)
+	delete(s.baselineIgnores, key)
+	return true
 }
 
 func (s *Service) clearTracked(symbol, side string) {

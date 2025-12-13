@@ -293,16 +293,19 @@ func (t *HyperliquidTrader) GetPositions() ([]map[string]interface{}, error) {
 
 		posMap := make(map[string]interface{})
 
-		// 标准化symbol格式（Hyperliquid使用如"BTC"，我们转换为"BTCUSDT"）
-		symbol := position.Coin + "USDT"
+		// 标准化symbol格式（Hyperliquid使用如"BTC"，转换为大写 BTCUSDT 方便统一解析）
+		symbol := strings.ToUpper(position.Coin) + "USDT"
 		posMap["symbol"] = symbol
 
 		// 持仓数量和方向
+		// 约定：positionAmt 为正数，side/posSide 标记方向，供 parsePosition 识别
 		if posAmt > 0 {
 			posMap["side"] = "long"
+			posMap["posSide"] = "long"
 			posMap["positionAmt"] = posAmt
 		} else {
 			posMap["side"] = "short"
+			posMap["posSide"] = "short"
 			posMap["positionAmt"] = -posAmt // 转为正数
 		}
 

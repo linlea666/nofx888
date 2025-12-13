@@ -172,7 +172,7 @@ func parsePosition(p map[string]interface{}) (symbol string, size float64, isLon
 			isLong = false
 		}
 	}
-	if ps, ok := p["side"].(string); ok && ps != "" && symbol == "" {
+	if ps, ok := p["side"].(string); ok && ps != "" {
 		switch strings.ToLower(ps) {
 		case "long", "buy":
 			isLong = true

@@ -244,13 +244,6 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 		return
 	}
 
-	// 基线处理：初始仓位的首次 open/add 直接跳过并清理黑名单
-	if (ev.Action == "open" || ev.Action == "add") && s.consumeBaseline(ev.Symbol, ev.Side) {
-		logger.Infof("copysync: skip %s %s because leader baseline position exists (symbol=%s side=%s)", ev.Symbol, ev.Action, ev.Symbol, ev.Side)
-		s.logSkip(ev, "baseline_position")
-		return
-	}
-
 	// 事件时效校验：超出窗口则丢弃，避免重放
 	if s.cfg.StaleEventWindowSec > 0 && !ev.Timestamp.IsZero() {
 		if time.Since(ev.Timestamp) > time.Duration(s.cfg.StaleEventWindowSec)*time.Second {
@@ -270,11 +263,6 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 	// 如果是 reduce/close 但跟随端无仓位，则跳过，避免 reduce-only 报错
 	if ev.Action == "reduce" || ev.Action == "close" {
 		if !s.followerHasPosition(ev.Symbol, ev.Side) {
-			if s.consumeBaseline(ev.Symbol, ev.Side) {
-				logger.Infof("copysync: skip %s %s because leader baseline position exists (symbol=%s side=%s)", ev.Symbol, ev.Action, ev.Symbol, ev.Side)
-				s.logSkip(ev, "baseline_position")
-				return
-			}
 			logger.Infof("copysync: skip %s %s follower has no position", ev.Symbol, ev.Action)
 			s.logSkip(ev, "follower_position_missing")
 			return
@@ -479,10 +467,12 @@ func (s *Service) currentFollowerPositionSize(symbol, side string) (float64, err
 }
 
 func (s *Service) followerHasPosition(symbol, side string) bool {
-	if size, err := s.currentFollowerPositionSize(symbol, side); err == nil {
-		return size > positionEpsilon
+	size, err := s.currentFollowerPositionSize(symbol, side)
+	if err != nil {
+		logger.Infof("copysync: follower position query failed for %s %s: %v", symbol, side, err)
+		return false
 	}
-	return s.trackedPositions[symbolSideKey(symbol, side)] > positionEpsilon
+	return size > positionEpsilon
 }
 
 // reconcileFollowerPositions 对比基线和跟随端持仓，必要时强制平掉残留/反向仓。

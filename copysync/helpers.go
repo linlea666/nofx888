@@ -136,6 +136,14 @@ func deriveHLFragments(dir string, startPos float64, sz float64) []actionFragmen
 		return decomposeClose(startPos, sz, "long")
 	case "Close Short":
 		return decomposeClose(startPos, sz, "short")
+	case "Long > Short":
+		return decomposeClose(startPos, sz, "long")
+	case "Short > Long":
+		return decomposeClose(startPos, sz, "short")
+	case "Long > Flat":
+		return decomposeClose(startPos, sz, "long")
+	case "Short > Flat":
+		return decomposeClose(startPos, sz, "short")
 	default:
 		return nil
 	}

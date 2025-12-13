@@ -164,8 +164,6 @@ func (s *Service) Start() error {
 	if err := s.provider.Start(s.ctx); err != nil {
 		return fmt.Errorf("start provider: %w", err)
 	}
-	// 周期性刷新基线，避免长期运行后快照失效
-	go s.refreshBaselineLoop()
 	s.wg.Add(1)
 	go s.loop()
 	logger.Infof("📡 CopySync started for provider=%s", s.provider.Name())
@@ -413,29 +411,7 @@ func (s *Service) retrySnapshot() {
 			}
 			logger.Infof("copysync: snapshot retry success after %d attempt(s)", attempt)
 			s.SetBaseline(snap)
-			s.reconcileFollowerPositions()
 			return
-		}
-	}
-}
-
-// refreshBaselineLoop 周期性刷新基线（每30分钟）。
-func (s *Service) refreshBaselineLoop() {
-	ticker := time.NewTicker(30 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-ticker.C:
-			snap, err := s.provider.Snapshot(s.ctx)
-			if err != nil {
-				logger.Warnf("copysync: refresh baseline failed: %v", err)
-				continue
-			}
-			s.SetBaseline(snap)
-			logger.Infof("copysync: baseline refreshed at %s", time.Now().Format(time.RFC3339))
-			s.reconcileFollowerPositions()
 		}
 	}
 }
@@ -473,52 +449,6 @@ func (s *Service) followerHasPosition(symbol, side string) bool {
 		return false
 	}
 	return size > positionEpsilon
-}
-
-// reconcileFollowerPositions 对比基线和跟随端持仓，必要时强制平掉残留/反向仓。
-func (s *Service) reconcileFollowerPositions() {
-	te, ok := s.executor.(*TraderExecutor)
-	if !ok || te == nil || te.Trader == nil {
-		return
-	}
-	if s.baseline == nil || s.baseline.Positions == nil {
-		return
-	}
-	positions, err := te.Trader.GetPositions()
-	if err != nil {
-		return
-	}
-	for _, p := range positions {
-		sym, size, isLong, err := parsePosition(p)
-		if err != nil {
-			logger.Warnf("copysync: reconcile skip invalid position: %v", err)
-			continue
-		}
-		side := "long"
-		if !isLong {
-			side = "short"
-		}
-		key := symbolSideKey(sym, side)
-		basePos := s.baseline.Positions[key]
-		if basePos == nil || basePos.Size <= 0 {
-			logger.Warnf("copysync: reconcile close residual position %s %s size=%.4f", sym, side, size)
-			_ = te.close(nil, side, sym, size)
-			s.clearTracked(sym, side)
-			continue
-		}
-		// 方向一致但数量超出基线，平掉差额
-		if size > basePos.Size {
-			diff := size - basePos.Size
-			logger.Warnf("copysync: reconcile trim position %s %s diff=%.4f", sym, side, diff)
-			_ = te.close(nil, side, sym, diff)
-		}
-		// 方向相反（基线方向与当前不符），平掉当前全部
-		if basePos.Side != "" && basePos.Side != side {
-			logger.Warnf("copysync: reconcile opposite position %s follower=%s base=%s size=%.4f", sym, side, basePos.Side, size)
-			_ = te.close(nil, side, sym, size)
-			s.clearTracked(sym, side)
-		}
-	}
 }
 
 // handleFollowerPositions 在开/加仓前检查跟随端持仓，处理同向/反向残留。

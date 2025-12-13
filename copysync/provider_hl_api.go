@@ -221,8 +221,14 @@ func (p *HyperliquidAPIProvider) fillToEvents(f hlFill) []ProviderEvent {
 
 	fragments := deriveHLFragments(f.Dir, startPos, size)
 	if len(fragments) == 0 {
+		logger.Infof("HL API fill ignored (no fragments) tid=%d dir=%s startPos=%.8f sz=%.8f", f.Tid, f.Dir, startPos, size)
 		return nil
 	}
+	fragStrs := make([]string, 0, len(fragments))
+	for _, frag := range fragments {
+		fragStrs = append(fragStrs, fmt.Sprintf("%s/%s/%.8f", frag.action, frag.side, frag.qty))
+	}
+	logger.Infof("HL API fill fragments tid=%d dir=%s startPos=%.8f sz=%.8f parts=%s", f.Tid, f.Dir, startPos, size, strings.Join(fragStrs, ","))
 
 	p.equityMu.RLock()
 	equity := p.leaderEquity

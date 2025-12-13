@@ -48,7 +48,7 @@ func handleSingleSidedFollowerPositions(s *Service, ev ProviderEvent) (bool, str
 			logger.Warnf("copysync: single-sided skip invalid position: %v", err)
 			continue
 		}
-		if ps != ev.Symbol || size <= 0 {
+		if !SymbolsMatch(ps, ev.Symbol) || size <= 0 {
 			continue
 		}
 		if (ev.Side == "long" && isLong) || (ev.Side == "short" && !isLong) {

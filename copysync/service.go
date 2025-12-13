@@ -33,6 +33,7 @@ type ExecutionAdapter interface {
 // CopyDecision 已计算好的跟单指令，传递给 ExecutionAdapter。
 type CopyDecision struct {
 	ProviderEvent    ProviderEvent `json:"provider_event"`
+	Symbol           string        `json:"symbol"`
 	FollowerEquity   float64       `json:"follower_equity"`
 	FollowerNotional float64       `json:"follower_notional"`
 	FollowerQty      float64       `json:"follower_qty"`
@@ -98,11 +99,32 @@ func (s *Service) SetBaseline(state *LeaderState) {
 	if state == nil {
 		return
 	}
-	s.baseline = state
+	s.baseline = s.normalizeLeaderState(state)
 	if !s.baselineInitOnce {
 		s.rebuildBaselineIgnores()
 		s.baselineInitOnce = true
 	}
+}
+
+func (s *Service) normalizeLeaderState(state *LeaderState) *LeaderState {
+	if state == nil {
+		return nil
+	}
+	if len(state.Positions) == 0 {
+		return state
+	}
+	norm := make(map[string]*LeaderPosition, len(state.Positions))
+	for key, pos := range state.Positions {
+		if pos == nil {
+			continue
+		}
+		cp := *pos
+		cp.Symbol = NormalizeSymbol(cp.Symbol)
+		newKey := fmt.Sprintf("%s_%s", cp.Symbol, cp.Side)
+		norm[newKey] = &cp
+	}
+	state.Positions = norm
+	return state
 }
 
 func (s *Service) logSkip(ev ProviderEvent, reason string) {
@@ -111,6 +133,7 @@ func (s *Service) logSkip(ev ProviderEvent, reason string) {
 	}
 	dec := &CopyDecision{
 		ProviderEvent:  ev,
+		Symbol:         NormalizeSymbol(ev.Symbol),
 		Skipped:        true,
 		SkipReason:     reason,
 		CopySkipReason: reason,
@@ -335,6 +358,7 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 
 	decision := &CopyDecision{
 		ProviderEvent:    ev,
+		Symbol:           NormalizeSymbol(ev.Symbol),
 		FollowerEquity:   followerEquity,
 		FollowerNotional: followerNotional,
 		FollowerQty:      qty,
@@ -436,7 +460,7 @@ func (s *Service) currentFollowerPositionSize(symbol, side string) (float64, err
 			logger.Infof("copysync: ignore position parse error for follower position %v", err)
 			continue
 		}
-		if ps == symbol && size > 0 {
+		if SymbolsMatch(ps, symbol) && size > 0 {
 			if (side == "long" && isLong) || (side == "short" && !isLong) {
 				total += size
 			}
@@ -475,7 +499,7 @@ func (s *Service) reconcileFollowerPositions() {
 		if !isLong {
 			side = "short"
 		}
-		key := fmt.Sprintf("%s_%s", sym, side)
+		key := symbolSideKey(sym, side)
 		basePos := s.baseline.Positions[key]
 		if basePos == nil || basePos.Size <= 0 {
 			logger.Warnf("copysync: reconcile close residual position %s %s size=%.4f", sym, side, size)
@@ -541,11 +565,12 @@ func (s *Service) ignoreDueToBaseline(ev ProviderEvent) bool {
 }
 
 func (s *Service) clearTracked(symbol, side string) {
-	key := symbolSideKey(symbol, side)
+	normSym := NormalizeSymbol(symbol)
+	key := symbolSideKey(normSym, side)
 	delete(s.trackedPositions, key)
 	delete(s.baselineIgnores, key)
 	if s.trackerStore != nil && s.traderID != "" {
-		if err := s.trackerStore.Delete(s.traderID, symbol, side); err != nil {
+		if err := s.trackerStore.Delete(s.traderID, normSym, side); err != nil {
 			logger.Warnf("copysync: remove tracked position failed %s %s: %v", symbol, side, err)
 		}
 	}
@@ -580,11 +605,12 @@ func (s *Service) setTrackedInternal(symbol, side string, size float64, persist 
 		s.clearTracked(symbol, side)
 		return
 	}
-	key := symbolSideKey(symbol, side)
+	normSym := NormalizeSymbol(symbol)
+	key := symbolSideKey(normSym, side)
 	delete(s.baselineIgnores, key)
 	s.trackedPositions[key] = size
 	if persist && s.trackerStore != nil && s.traderID != "" {
-		if err := s.trackerStore.Upsert(s.traderID, symbol, side, size); err != nil {
+		if err := s.trackerStore.Upsert(s.traderID, normSym, side, size); err != nil {
 			logger.Warnf("copysync: persist tracked position failed %s %s: %v", symbol, side, err)
 		}
 	}
@@ -624,5 +650,5 @@ func splitSymbolSide(key string) (string, string) {
 }
 
 func symbolSideKey(symbol, side string) string {
-	return fmt.Sprintf("%s_%s", symbol, side)
+	return fmt.Sprintf("%s_%s", NormalizeSymbol(symbol), side)
 }

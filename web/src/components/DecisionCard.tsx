@@ -52,6 +52,7 @@ export function DecisionCard({ decision, language }: DecisionCardProps) {
       <div className="flex items-start justify-between mb-3">
         <div>
           <div className="font-semibold" style={{ color: '#EAECEF' }}>
+            {decision.symbol ? `${decision.symbol} · ` : ''}
             {t('cycle', language)} #{decision.cycle_number}
           </div>
           <div className="text-xs" style={{ color: '#848E9C' }}>
@@ -200,6 +201,7 @@ export function DecisionCard({ decision, language }: DecisionCardProps) {
           <div className="font-semibold text-sm">跟单详情</div>
 
           <div className="flex flex-wrap gap-2 items-center text-[11px]">
+            {decision.symbol && renderBadge(`币种：${decision.symbol}`, 'info')}
             {decision.provider_type && renderBadge(`来源：${decision.provider_type}`, 'info')}
             {decision.trace_id && renderBadge(`trace_id: ${decision.trace_id}`, 'info')}
             {decision.price_source && renderBadge(`价源：${decision.price_source}`, 'info')}

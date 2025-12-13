@@ -411,6 +411,7 @@ func (at *AutoTrader) Run() error {
 					ErrCode:          dec.ErrCode,
 					TraceID:          ce.TraceID,
 					ProviderType:     ce.ProviderType,
+					Symbol:           copysync.NormalizeSymbol(ce.Symbol),
 					LeaderEquity:     ce.LeaderEquity,
 					LeaderNotional:   ce.Notional,
 					LeaderPrice:      ce.Price,

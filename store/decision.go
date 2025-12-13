@@ -38,6 +38,7 @@ type DecisionRecord struct {
 	// 跟单扩展字段（可选，使用 decision_json/extra 保存亦可）
 	TraceID          string  `json:"trace_id,omitempty"`
 	ProviderType     string  `json:"provider_type,omitempty"`
+	Symbol           string  `json:"symbol,omitempty"`
 	LeaderEquity     float64 `json:"leader_equity,omitempty"`
 	LeaderNotional   float64 `json:"leader_notional,omitempty"`
 	LeaderPrice      float64 `json:"leader_price,omitempty"`
@@ -122,6 +123,7 @@ func (s *DecisionStore) initTables() error {
 			ai_request_duration_ms INTEGER DEFAULT 0,
 			trace_id TEXT DEFAULT '',
 			provider_type TEXT DEFAULT '',
+			symbol TEXT DEFAULT '',
 			leader_equity REAL DEFAULT 0,
 			leader_notional REAL DEFAULT 0,
 			leader_price REAL DEFAULT 0,
@@ -152,6 +154,7 @@ func (s *DecisionStore) initTables() error {
 	alterQueries := []string{
 		`ALTER TABLE decision_records ADD COLUMN trace_id TEXT DEFAULT ''`,
 		`ALTER TABLE decision_records ADD COLUMN provider_type TEXT DEFAULT ''`,
+		`ALTER TABLE decision_records ADD COLUMN symbol TEXT DEFAULT ''`,
 		`ALTER TABLE decision_records ADD COLUMN leader_equity REAL DEFAULT 0`,
 		`ALTER TABLE decision_records ADD COLUMN leader_notional REAL DEFAULT 0`,
 		`ALTER TABLE decision_records ADD COLUMN leader_price REAL DEFAULT 0`,
@@ -191,15 +194,15 @@ func (s *DecisionStore) LogDecision(record *DecisionRecord) error {
 			trader_id, cycle_number, timestamp, system_prompt, input_prompt,
 			cot_trace, decision_json, candidate_coins, execution_log,
 			success, error_message, ai_request_duration_ms,
-			trace_id, provider_type, leader_equity, leader_notional, leader_price, price_source,
+			trace_id, provider_type, symbol, leader_equity, leader_notional, leader_price, price_source,
        follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason, err_code
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.TraderID, record.CycleNumber, record.Timestamp.Format(time.RFC3339),
 		record.SystemPrompt, record.InputPrompt, record.CoTTrace, record.DecisionJSON,
 		string(candidateCoinsJSON), string(executionLogJSON),
 		record.Success, record.ErrorMessage, record.AIRequestDurationMs,
-		record.TraceID, record.ProviderType, record.LeaderEquity, record.LeaderNotional, record.LeaderPrice, record.PriceSource,
+		record.TraceID, record.ProviderType, record.Symbol, record.LeaderEquity, record.LeaderNotional, record.LeaderPrice, record.PriceSource,
 		record.FollowerEquity, record.FollowerNotional, record.FollowerQty, record.CopyRatio, record.Formula, record.MinHit, record.MaxHit, record.CopySkipReason, record.ErrCode,
 	)
 	if err != nil {
@@ -248,7 +251,7 @@ func (s *DecisionStore) GetLatestRecords(traderID string, n int) ([]*DecisionRec
 		SELECT id, trader_id, cycle_number, timestamp, system_prompt, input_prompt,
 		       cot_trace, decision_json, candidate_coins, execution_log,
 		       success, error_message, ai_request_duration_ms,
-		       trace_id, provider_type, leader_equity, leader_notional, leader_price, price_source,
+		       trace_id, provider_type, symbol, leader_equity, leader_notional, leader_price, price_source,
        follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason, err_code
 		FROM decision_records
 		WHERE trader_id = ?
@@ -288,7 +291,7 @@ func (s *DecisionStore) GetAllLatestRecords(n int) ([]*DecisionRecord, error) {
 		SELECT id, trader_id, cycle_number, timestamp, system_prompt, input_prompt,
 		       cot_trace, decision_json, candidate_coins, execution_log,
 		       success, error_message, ai_request_duration_ms,
-		       trace_id, provider_type, leader_equity, leader_notional, leader_price, price_source,
+		       trace_id, provider_type, symbol, leader_equity, leader_notional, leader_price, price_source,
 		       follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason, err_code
 		FROM decision_records
 		ORDER BY timestamp DESC
@@ -324,7 +327,7 @@ func (s *DecisionStore) GetRecordsByDate(traderID string, date time.Time) ([]*De
 		SELECT id, trader_id, cycle_number, timestamp, system_prompt, input_prompt,
 			   cot_trace, decision_json, candidate_coins, execution_log,
 			   success, error_message, ai_request_duration_ms,
-			   trace_id, provider_type, leader_equity, leader_notional, leader_price, price_source,
+			   trace_id, provider_type, symbol, leader_equity, leader_notional, leader_price, price_source,
 			   follower_equity, follower_notional, follower_qty, copy_ratio, formula, min_hit, max_hit, copy_skip_reason, err_code
 		FROM decision_records
 		WHERE trader_id = ? AND DATE(timestamp) = ?
@@ -445,14 +448,14 @@ func (s *DecisionStore) scanDecisionRecord(rows *sql.Rows) (*DecisionRecord, err
 	}
 	// 新增字段
 	var (
-		traceID, providerType, priceSource, formula, copySkipReason sql.NullString
-		leaderEquity, leaderNotional, leaderPrice                   sql.NullFloat64
-		followerEquity, followerNotional, followerQty, copyRatio    sql.NullFloat64
-		minHit, maxHit                                              sql.NullBool
-		errCode                                                     sql.NullString
+		traceID, providerType, symbol, priceSource, formula, copySkipReason sql.NullString
+		leaderEquity, leaderNotional, leaderPrice                           sql.NullFloat64
+		followerEquity, followerNotional, followerQty, copyRatio            sql.NullFloat64
+		minHit, maxHit                                                      sql.NullBool
+		errCode                                                             sql.NullString
 	)
 	scanTargets = append(scanTargets,
-		&traceID, &providerType, &leaderEquity, &leaderNotional, &leaderPrice, &priceSource,
+		&traceID, &providerType, &symbol, &leaderEquity, &leaderNotional, &leaderPrice, &priceSource,
 		&followerEquity, &followerNotional, &followerQty, &copyRatio, &formula, &minHit, &maxHit, &copySkipReason, &errCode,
 	)
 
@@ -462,6 +465,7 @@ func (s *DecisionStore) scanDecisionRecord(rows *sql.Rows) (*DecisionRecord, err
 
 	record.TraceID = traceID.String
 	record.ProviderType = providerType.String
+	record.Symbol = symbol.String
 	record.LeaderEquity = leaderEquity.Float64
 	record.LeaderNotional = leaderNotional.Float64
 	record.LeaderPrice = leaderPrice.Float64

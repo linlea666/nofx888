@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+var (
+	symbolNormalizeReplacer = strings.NewReplacer("-", "", "_", "", "/", "", " ", "", ":", "", ".", "")
+	symbolQuoteSuffixes     = []string{"USDTPERP", "USDT", "USDC", "BUSD", "USD", "PERP", "SWAP", "FUT"}
+)
+
 func parseFloat(s string, def float64) float64 {
 	if s == "" {
 		return def
@@ -33,6 +38,43 @@ func abs(v float64) float64 {
 		return -v
 	}
 	return v
+}
+
+// NormalizeSymbol strips common quote suffixes/formatting so that BTC/BTCPERP/BTCUSDT map to BTC.
+func NormalizeSymbol(symbol string) string {
+	s := strings.ToUpper(strings.TrimSpace(symbol))
+	if s == "" {
+		return ""
+	}
+	s = symbolNormalizeReplacer.Replace(s)
+	orig := s
+	for {
+		trimmed := false
+		for _, suf := range symbolQuoteSuffixes {
+			if len(s) > len(suf) && strings.HasSuffix(s, suf) {
+				s = strings.TrimSuffix(s, suf)
+				trimmed = true
+				break
+			}
+		}
+		if !trimmed {
+			break
+		}
+	}
+	if s == "" {
+		return orig
+	}
+	return s
+}
+
+// SymbolsMatch compares two symbols after running NormalizeSymbol.
+func SymbolsMatch(a, b string) bool {
+	na := NormalizeSymbol(a)
+	nb := NormalizeSymbol(b)
+	if na == "" || nb == "" {
+		return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+	}
+	return na == nb
 }
 
 // parsePosition 通用持仓解析：返回 symbol、绝对数量、是否多头。

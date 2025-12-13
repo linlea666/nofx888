@@ -77,6 +77,7 @@ export interface DecisionRecord {
   // 跟单扩展（可选）
   trace_id?: string
   provider_type?: string
+  symbol?: string
   leader_equity?: number
   leader_notional?: number
   leader_price?: number

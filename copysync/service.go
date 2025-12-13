@@ -539,47 +539,17 @@ func (s *Service) rebuildBaselineIgnores() {
 }
 
 func (s *Service) hasBaseline(symbol, side string) bool {
-	if len(s.baselineIgnores) == 0 {
-		return false
-	}
-	key := symbolSideKey(symbol, side)
-	if s.trackedPositions[key] > positionEpsilon {
-		return false
-	}
-	return s.baselineIgnores[key]
+	return false
 }
 
 func (s *Service) consumeBaseline(symbol, side string) bool {
-	if !s.hasBaseline(symbol, side) {
-		return false
-	}
-	key := symbolSideKey(symbol, side)
-	delete(s.baselineIgnores, key)
-	return true
+	return false
 }
 
 func (s *Service) clearTracked(symbol, side string) {
-	normSym := NormalizeSymbol(symbol)
-	key := symbolSideKey(normSym, side)
-	delete(s.trackedPositions, key)
-	delete(s.baselineIgnores, key)
-	if s.trackerStore != nil && s.traderID != "" {
-		if err := s.trackerStore.Delete(s.traderID, normSym, side); err != nil {
-			logger.Warnf("copysync: remove tracked position failed %s %s: %v", symbol, side, err)
-		}
-	}
 }
 
 func (s *Service) afterExecution(ev ProviderEvent, dec *CopyDecision) error {
-	if dec != nil && dec.Skipped {
-		return nil
-	}
-	switch ev.Action {
-	case "open", "add", "reduce":
-		s.refreshTrackedState(ev, dec)
-	case "close":
-		s.clearTracked(ev.Symbol, ev.Side)
-	}
 	return nil
 }
 
@@ -595,44 +565,9 @@ func (s *Service) setTracked(symbol, side string, size float64) {
 }
 
 func (s *Service) setTrackedInternal(symbol, side string, size float64, persist bool) {
-	if size <= positionEpsilon {
-		s.clearTracked(symbol, side)
-		return
-	}
-	normSym := NormalizeSymbol(symbol)
-	key := symbolSideKey(normSym, side)
-	delete(s.baselineIgnores, key)
-	s.trackedPositions[key] = size
-	if persist && s.trackerStore != nil && s.traderID != "" {
-		if err := s.trackerStore.Upsert(s.traderID, normSym, side, size); err != nil {
-			logger.Warnf("copysync: persist tracked position failed %s %s: %v", symbol, side, err)
-		}
-	}
 }
 
 func (s *Service) refreshTrackedState(ev ProviderEvent, dec *CopyDecision) {
-	size, err := s.currentFollowerPositionSize(ev.Symbol, ev.Side)
-	if err != nil {
-		prev := s.trackedSize(ev.Symbol, ev.Side)
-		qty := 0.0
-		if dec != nil {
-			qty = dec.FollowerQty
-		}
-		switch ev.Action {
-		case "open", "add":
-			size = prev + qty
-		case "reduce":
-			size = math.Max(prev-qty, 0)
-		default:
-			size = prev
-		}
-		logger.Warnf("copysync: follower position query failed %s %s: %v (fallback=%.6f)", ev.Symbol, ev.Side, err, size)
-	}
-	if size <= positionEpsilon {
-		s.clearTracked(ev.Symbol, ev.Side)
-		return
-	}
-	s.setTracked(ev.Symbol, ev.Side, size)
 }
 
 func splitSymbolSide(key string) (string, string) {

@@ -198,28 +198,30 @@ func (p *HyperliquidAPIProvider) pollFills(ctx context.Context) error {
 		if f.Time <= p.cursor {
 			continue
 		}
-		ev, ok := p.fillToEvent(f)
-		if !ok {
+		events := p.fillToEvents(f)
+		if len(events) == 0 {
 			continue
 		}
 		p.cursor = f.Time
-		select {
-		case p.events <- ev:
-		default:
-			// 队列满丢弃
+		for _, ev := range events {
+			select {
+			case p.events <- ev:
+			default:
+				// 队列满丢弃
+			}
 		}
 	}
 	return nil
 }
 
-func (p *HyperliquidAPIProvider) fillToEvent(f hlFill) (ProviderEvent, bool) {
+func (p *HyperliquidAPIProvider) fillToEvents(f hlFill) []ProviderEvent {
 	price, _ := strconv.ParseFloat(f.Px, 64)
 	size, _ := strconv.ParseFloat(f.Sz, 64)
 	startPos, _ := strconv.ParseFloat(f.StartPosition, 64)
 
-	action, side := deriveHLActionHL(f.Dir, startPos, size)
-	if action == "" || side == "" {
-		return ProviderEvent{}, false
+	fragments := deriveHLFragments(f.Dir, startPos, size)
+	if len(fragments) == 0 {
+		return nil
 	}
 
 	p.equityMu.RLock()
@@ -227,51 +229,27 @@ func (p *HyperliquidAPIProvider) fillToEvent(f hlFill) (ProviderEvent, bool) {
 	marginMode := p.marginModeMap[strings.ToUpper(f.Coin)]
 	p.equityMu.RUnlock()
 
-	return ProviderEvent{
-		TraceID:      fmt.Sprintf("hl-%d", f.Tid),
-		SourceID:     p.address,
-		ProviderType: "hyperliquid_api",
-		Symbol:       f.Coin,
-		Side:         side,
-		Action:       action,
-		Price:        price,
-		PriceSource:  "fill",
-		Size:         size,
-		Notional:     price * size,
-		LeaderEquity: equity,
-		MarginMode:   marginMode,
-		Timestamp:    time.UnixMilli(f.Time),
-		Seq:          f.Time,
-	}, true
-}
-
-func deriveHLActionHL(dir string, startPos float64, sz float64) (string, string) {
-	switch dir {
-	case "Open Long":
-		if startPos == 0 {
-			return "open", "long"
+	events := make([]ProviderEvent, 0, len(fragments))
+	for _, frag := range fragments {
+		ev := ProviderEvent{
+			TraceID:      fmt.Sprintf("hl-%d", f.Tid),
+			SourceID:     p.address,
+			ProviderType: "hyperliquid_api",
+			Symbol:       f.Coin,
+			Side:         frag.side,
+			Action:       frag.action,
+			Price:        price,
+			PriceSource:  "fill",
+			Size:         frag.qty,
+			Notional:     price * frag.qty,
+			LeaderEquity: equity,
+			MarginMode:   marginMode,
+			Timestamp:    time.UnixMilli(f.Time),
+			Seq:          f.Time,
 		}
-		return "add", "long"
-	case "Open Short":
-		if startPos == 0 {
-			return "open", "short"
-		}
-		return "add", "short"
-	case "Close Long":
-		after := startPos - sz
-		if math.Abs(after) < 1e-9 {
-			return "close", "long"
-		}
-		return "reduce", "long"
-	case "Close Short":
-		after := startPos + sz
-		if math.Abs(after) < 1e-9 {
-			return "close", "short"
-		}
-		return "reduce", "short"
-	default:
-		return "", ""
+		events = append(events, ev)
 	}
+	return events
 }
 
 func (p *HyperliquidAPIProvider) refreshClearinghouse(ctx context.Context) error {

@@ -277,28 +277,29 @@ func (p *HyperliquidWSProvider) handleMessage(msg []byte) {
 		}
 		p.seenMu.Unlock()
 
-		ev, ok := p.fillToEvent(f)
-		if !ok {
+		events := p.fillToEvents(f)
+		if len(events) == 0 {
 			continue
 		}
 		p.cursor = f.Time
-		select {
-		case p.events <- ev:
-		default:
+		for _, ev := range events {
+			select {
+			case p.events <- ev:
+			default:
+			}
 		}
 	}
 }
 
-func (p *HyperliquidWSProvider) fillToEvent(f hlFill) (ProviderEvent, bool) {
+func (p *HyperliquidWSProvider) fillToEvents(f hlFill) []ProviderEvent {
 	price, _ := strconv.ParseFloat(f.Px, 64)
 	size, _ := strconv.ParseFloat(f.Sz, 64)
 	startPos, _ := strconv.ParseFloat(f.StartPosition, 64)
 
-	action, side := deriveHLActionHL(f.Dir, startPos, size)
-	if action == "" || side == "" {
-		return ProviderEvent{}, false
+	fragments := deriveHLFragments(f.Dir, startPos, size)
+	if len(fragments) == 0 {
+		return nil
 	}
-	// 游标去重容差，避免重复推送（HL 可能有重复 tid）
 	roundedTime := f.Time
 	if roundedTime == 0 {
 		roundedTime = time.Now().UnixMilli()
@@ -307,22 +308,28 @@ func (p *HyperliquidWSProvider) fillToEvent(f hlFill) (ProviderEvent, bool) {
 	equity := p.leaderEquity
 	marginMode := p.marginModeMap[strings.ToUpper(f.Coin)]
 	p.equityMu.RUnlock()
-	return ProviderEvent{
-		TraceID:      fmt.Sprintf("hl-ws-%d", f.Tid),
-		SourceID:     p.address,
-		ProviderType: "hyperliquid_ws",
-		Symbol:       f.Coin,
-		Side:         side,
-		Action:       action,
-		Price:        price,
-		PriceSource:  "fill",
-		Size:         size,
-		Notional:     price * size,
-		LeaderEquity: equity,
-		MarginMode:   marginMode,
-		Timestamp:    time.UnixMilli(roundedTime),
-		Seq:          roundedTime,
-	}, true
+
+	events := make([]ProviderEvent, 0, len(fragments))
+	for _, frag := range fragments {
+		ev := ProviderEvent{
+			TraceID:      fmt.Sprintf("hl-ws-%d", f.Tid),
+			SourceID:     p.address,
+			ProviderType: "hyperliquid_ws",
+			Symbol:       f.Coin,
+			Side:         frag.side,
+			Action:       frag.action,
+			Price:        price,
+			PriceSource:  "fill",
+			Size:         frag.qty,
+			Notional:     price * frag.qty,
+			LeaderEquity: equity,
+			MarginMode:   marginMode,
+			Timestamp:    time.UnixMilli(roundedTime),
+			Seq:          roundedTime,
+		}
+		events = append(events, ev)
+	}
+	return events
 }
 
 func (p *HyperliquidWSProvider) refreshClearinghouse(ctx context.Context) error {

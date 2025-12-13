@@ -2,6 +2,7 @@ package copysync
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -75,6 +76,69 @@ func SymbolsMatch(a, b string) bool {
 		return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
 	}
 	return na == nb
+}
+
+type actionFragment struct {
+	action string
+	side   string
+	qty    float64
+}
+
+func decomposeClose(startPos float64, delta float64, closingSide string) []actionFragment {
+	fragments := []actionFragment{}
+	if delta <= 0 {
+		return fragments
+	}
+	existing := math.Abs(startPos)
+	closeQty := math.Min(existing, delta)
+	if closeQty <= 0 {
+		return fragments
+	}
+	act := "close"
+	if closeQty < existing {
+		act = "reduce"
+	}
+	fragments = append(fragments, actionFragment{
+		action: act,
+		side:   closingSide,
+		qty:    closeQty,
+	})
+	remaining := delta - existing
+	if remaining > 1e-9 {
+		openSide := "short"
+		if closingSide == "short" {
+			openSide = "long"
+		}
+		fragments = append(fragments, actionFragment{
+			action: "open",
+			side:   openSide,
+			qty:    remaining,
+		})
+	}
+	return fragments
+}
+
+func deriveHLFragments(dir string, startPos float64, sz float64) []actionFragment {
+	switch dir {
+	case "Open Long":
+		act := "add"
+		if math.Abs(startPos) < 1e-9 {
+			act = "open"
+		}
+		return []actionFragment{{action: act, side: "long", qty: sz}}
+	case "Open Short":
+		act := "add"
+		if math.Abs(startPos) < 1e-9 {
+			act = "open"
+		}
+		return []actionFragment{{action: act, side: "short", qty: sz}}
+	case "Close Long":
+		return decomposeClose(startPos, sz, "long")
+	case "Close Short":
+		return decomposeClose(startPos, sz, "short")
+	default:
+		return nil
+	}
 }
 
 // parsePosition 通用持仓解析：返回 symbol、绝对数量、是否多头。

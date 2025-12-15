@@ -58,14 +58,11 @@ type Service struct {
 	priceFunc func(symbol string) (float64, string, error) // 行情兜底，返回价格及价源
 	loggerCb  func(decision *CopyDecision)
 
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	baseline *LeaderState
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
-	baselineIgnores  map[string]bool
 	trackedPositions map[string]float64
-	baselineInitOnce bool
 	trackerStore     TrackedPositionStore
 	traderID         string
 	strategy         CopyStrategy
@@ -86,45 +83,11 @@ func NewService(cfg CopyConfig, provider Provider, account FollowerAccount, exec
 		priceFunc:        priceFallback,
 		ctx:              ctx,
 		cancel:           cancel,
-		baselineIgnores:  make(map[string]bool),
 		trackedPositions: make(map[string]float64),
 		trackerStore:     tracker,
 		traderID:         traderID,
 		strategy:         strategy,
 	}
-}
-
-// SetBaseline 设置领航员基线快照（已有仓位不跟）。
-func (s *Service) SetBaseline(state *LeaderState) {
-	if state == nil {
-		return
-	}
-	s.baseline = s.normalizeLeaderState(state)
-	if !s.baselineInitOnce {
-		s.rebuildBaselineIgnores()
-		s.baselineInitOnce = true
-	}
-}
-
-func (s *Service) normalizeLeaderState(state *LeaderState) *LeaderState {
-	if state == nil {
-		return nil
-	}
-	if len(state.Positions) == 0 {
-		return state
-	}
-	norm := make(map[string]*LeaderPosition, len(state.Positions))
-	for _, pos := range state.Positions {
-		if pos == nil {
-			continue
-		}
-		cp := *pos
-		cp.Symbol = NormalizeSymbol(cp.Symbol)
-		newKey := fmt.Sprintf("%s_%s", cp.Symbol, cp.Side)
-		norm[newKey] = &cp
-	}
-	state.Positions = norm
-	return state
 }
 
 func (s *Service) logSkip(ev ProviderEvent, reason string) {
@@ -151,13 +114,6 @@ func (s *Service) WithLogger(cb func(decision *CopyDecision)) {
 func (s *Service) Start() error {
 	if s.provider == nil || s.account == nil || s.executor == nil {
 		return fmt.Errorf("copysync: missing provider/account/executor")
-	}
-	// 基线快照（用于过滤已有仓位）仅在可用时加载一次，失败则重试几次
-	if snap, err := s.provider.Snapshot(s.ctx); err == nil {
-		s.SetBaseline(snap)
-	} else {
-		logger.Warnf("copysync: snapshot failed on start: %v, will retry", err)
-		go s.retrySnapshot()
 	}
 
 	s.restoreTrackedPositions()
@@ -407,24 +363,6 @@ func (s *Service) shouldFollow(action string) bool {
 	}
 }
 
-func (s *Service) retrySnapshot() {
-	for attempt := 1; ; attempt++ {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-time.After(10 * time.Second):
-			snap, err := s.provider.Snapshot(s.ctx)
-			if err != nil {
-				logger.Warnf("copysync: retry snapshot failed (%d): %v", attempt, err)
-				continue
-			}
-			logger.Infof("copysync: snapshot retry success after %d attempt(s)", attempt)
-			s.SetBaseline(snap)
-			return
-		}
-	}
-}
-
 // followerHasPosition 简单查询跟随端是否已有同向仓位（用于防重复开仓）。
 func (s *Service) currentFollowerPositionSize(symbol, side string) (float64, error) {
 	te, ok := s.executor.(*TraderExecutor)
@@ -458,36 +396,6 @@ func (s *Service) followerHasPosition(symbol, side string) bool {
 		return false
 	}
 	return size > positionEpsilon
-}
-
-// handleFollowerPositions 在开/加仓前检查跟随端持仓，处理同向/反向残留。
-// 返回 true 表示已处理并需跳过本次事件。
-func (s *Service) rebuildBaselineIgnores() {
-	m := make(map[string]bool)
-	if s.baseline != nil && s.baseline.Positions != nil {
-		for key, pos := range s.baseline.Positions {
-			if pos == nil {
-				continue
-			}
-			if pos.Size > 0 && (pos.Side == "long" || pos.Side == "short") {
-				m[key] = true
-			}
-		}
-	}
-	s.baselineIgnores = m
-}
-
-func (s *Service) hasBaseline(symbol, side string) bool {
-	_ = symbol
-	_ = side
-	// 基线过滤已废弃，统一走实时持仓判断
-	return false
-}
-
-func (s *Service) consumeBaseline(symbol, side string) bool {
-	_ = symbol
-	_ = side
-	return false
 }
 
 func (s *Service) clearTracked(symbol, side string) {

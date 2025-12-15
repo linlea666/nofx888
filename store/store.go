@@ -16,16 +16,17 @@ type Store struct {
 	db *sql.DB
 
 	// 子存储（延迟初始化）
-	user      *UserStore
-	aiModel   *AIModelStore
-	exchange  *ExchangeStore
-	trader    *TraderStore
-	decision  *DecisionStore
-	backtest  *BacktestStore
-	order     *OrderStore
-	position  *PositionStore
-	strategy  *StrategyStore
-	equity    *EquityStore
+	user        *UserStore
+	aiModel     *AIModelStore
+	exchange    *ExchangeStore
+	trader      *TraderStore
+	decision    *DecisionStore
+	backtest    *BacktestStore
+	order       *OrderStore
+	position    *PositionStore
+	strategy    *StrategyStore
+	equity      *EquityStore
+	copyTracker *CopyTrackerStore
 
 	// 加密函数
 	encryptFunc func(string) string
@@ -146,6 +147,9 @@ func (s *Store) initTables() error {
 	}
 	if err := s.Equity().initTables(); err != nil {
 		return fmt.Errorf("初始化净值表失败: %w", err)
+	}
+	if err := s.CopyTracker().initTables(); err != nil {
+		return fmt.Errorf("初始化跟单持仓表失败: %w", err)
 	}
 	return nil
 }
@@ -281,8 +285,15 @@ func (s *Store) Equity() *EquityStore {
 	return s.equity
 }
 
-
-// CopyLog 获取跟单日志存储
+// CopyTracker 获取跟单持仓存储
+func (s *Store) CopyTracker() *CopyTrackerStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.copyTracker == nil {
+		s.copyTracker = NewCopyTrackerStore(s.db)
+	}
+	return s.copyTracker
+}
 
 // Close 关闭数据库连接
 func (s *Store) Close() error {

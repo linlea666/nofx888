@@ -39,6 +39,8 @@ func ClassifyErr(msg string) string {
 		return "price_missing"
 	case strings.Contains(l, "query_failed"):
 		return "status_query_failed"
+	case strings.Contains(l, "history_add_no_position"):
+		return "follower_position_missing"
 	default:
 		return "exchange_reject"
 	}

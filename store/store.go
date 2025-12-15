@@ -26,7 +26,6 @@ type Store struct {
 	position  *PositionStore
 	strategy  *StrategyStore
 	equity    *EquityStore
-	copyTrack *CopyTrackerStore
 
 	// 加密函数
 	encryptFunc func(string) string
@@ -141,9 +140,6 @@ func (s *Store) initTables() error {
 	}
 	if err := s.Position().InitTables(); err != nil {
 		return fmt.Errorf("初始化仓位表失败: %w", err)
-	}
-	if err := s.CopyTracker().initTables(); err != nil {
-		return fmt.Errorf("初始化跟单跟踪表失败: %w", err)
 	}
 	if err := s.Strategy().initTables(); err != nil {
 		return fmt.Errorf("初始化策略表失败: %w", err)
@@ -285,15 +281,6 @@ func (s *Store) Equity() *EquityStore {
 	return s.equity
 }
 
-// CopyTracker 获取跟单跟踪存储
-func (s *Store) CopyTracker() *CopyTrackerStore {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.copyTrack == nil {
-		s.copyTrack = &CopyTrackerStore{db: s.db}
-	}
-	return s.copyTrack
-}
 
 // CopyLog 获取跟单日志存储
 

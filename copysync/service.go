@@ -266,6 +266,15 @@ func (s *Service) handleEvent(ev ProviderEvent) {
 			return
 		}
 	}
+	// 加仓必须建立在已有同向仓位的前提下，避免“历史老仓加仓”把本地误当新开
+	if ev.Action == "add" {
+		if !s.followerHasPosition(ev.Symbol, ev.Side) {
+			logger.Infof("copysync: skip %s add follower has no position", ev.Symbol)
+			// 使用 history_add_no_position 明确区分，前端可针对此做“保护跳过”展示
+			s.logSkip(ev, "history_add_no_position")
+			return
+		}
+	}
 
 	price := ev.Price
 	priceSource := ev.PriceSource
@@ -469,17 +478,42 @@ func (s *Service) rebuildBaselineIgnores() {
 }
 
 func (s *Service) hasBaseline(symbol, side string) bool {
+	_ = symbol
+	_ = side
+	// 基线过滤已废弃，统一走实时持仓判断
 	return false
 }
 
 func (s *Service) consumeBaseline(symbol, side string) bool {
+	_ = symbol
+	_ = side
 	return false
 }
 
 func (s *Service) clearTracked(symbol, side string) {
+	symbol = NormalizeSymbol(symbol)
+	key := symbolSideKey(symbol, side)
+	delete(s.trackedPositions, key)
+
+	if s.trackerStore != nil && s.traderID != "" {
+		if err := s.trackerStore.Delete(s.traderID, symbol, side); err != nil {
+			logger.Warnf("copysync: clearTracked persist failed %s %s: %v", symbol, side, err)
+		}
+	}
 }
 
 func (s *Service) afterExecution(ev ProviderEvent, dec *CopyDecision) error {
+	symbol := NormalizeSymbol(ev.Symbol)
+	size, err := s.currentFollowerPositionSize(symbol, ev.Side)
+	if err != nil {
+		return err
+	}
+	if size <= positionEpsilon {
+		s.clearTracked(symbol, ev.Side)
+		return nil
+	}
+	s.setTrackedInternal(symbol, ev.Side, size, true)
+	_ = dec
 	return nil
 }
 
@@ -495,9 +529,30 @@ func (s *Service) setTracked(symbol, side string, size float64) {
 }
 
 func (s *Service) setTrackedInternal(symbol, side string, size float64, persist bool) {
+	symbol = NormalizeSymbol(symbol)
+	key := symbolSideKey(symbol, side)
+	s.trackedPositions[key] = size
+
+	if persist && s.trackerStore != nil && s.traderID != "" {
+		if err := s.trackerStore.Upsert(s.traderID, symbol, side, size); err != nil {
+			logger.Warnf("copysync: setTracked persist failed %s %s: %v", symbol, side, err)
+		}
+	}
 }
 
 func (s *Service) refreshTrackedState(ev ProviderEvent, dec *CopyDecision) {
+	symbol := NormalizeSymbol(ev.Symbol)
+	size, err := s.currentFollowerPositionSize(symbol, ev.Side)
+	if err != nil {
+		logger.Warnf("copysync: refreshTrackedState query failed %s %s: %v", symbol, ev.Side, err)
+		return
+	}
+	if size <= positionEpsilon {
+		s.clearTracked(symbol, ev.Side)
+		return
+	}
+	_ = dec
+	s.setTrackedInternal(symbol, ev.Side, size, false)
 }
 
 func splitSymbolSide(key string) (string, string) {
